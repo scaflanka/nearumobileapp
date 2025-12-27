@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '@/utils/auth';
+import { AntDesign } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -11,38 +13,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import styles from './authStyles';
-
-const localStyles = StyleSheet.create({
-  helperText: {
-    color: 'rgba(255, 255, 255, 0.8)',
-    textAlign: 'center',
-    fontSize: 14,
-    marginBottom: 12,
-  },
-  phoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  prefixInput: {
-    flexShrink: 0,
-    width: 90,
-    textAlign: 'center',
-    fontSize: 24,
-    paddingHorizontal: 16,
-  },
-  phoneInput: {
-    flex: 1,
-    textAlign: 'left',
-    fontSize: 24,
-    paddingHorizontal: 16,
-  },
-  nameInput: {
-    fontSize: 24,
-    paddingHorizontal: 16,
-  },
-});
 
 const sanitizeDigits = (value: string) => value.replace(/[^0-9]/g, '');
 
@@ -173,98 +143,263 @@ const MobileLogInScreen = () => {
       contentContainerStyle={styles.contentContainer}
       keyboardShouldPersistTaps="handled"
     >
-      <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-        <Text style={styles.backButtonText}>‹</Text>
+      <View style={styles.header}>
+        {/* Logo */}
+        <View style={styles.logoContainer}>
+          <Image
+            source={require('../../assets/logo/image.png')}
+            style={styles.logoImage}
+            contentFit="contain"
+          />
+        </View>
+        <Text style={styles.tagline}>Stay connected with your family</Text>
+      </View>
+
+      <Text style={styles.label}>Name</Text>
+      <View style={styles.inputContainer}>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter your name"
+          placeholderTextColor="#9CA3AF"
+          value={name}
+          onChangeText={setName}
+          editable={!loading}
+          autoCapitalize="words"
+        />
+      </View>
+
+      <Text style={styles.label}>Phone Number</Text>
+      <View style={[styles.inputContainer, styles.phoneRow]}>
+        <TextInput
+          style={styles.prefixInput}
+          placeholder="+94"
+          placeholderTextColor="#9CA3AF"
+          value={phonePrefix}
+          onChangeText={(value) => {
+            const sanitized = value.replace(/[^0-9+]/g, '');
+            const stripped = sanitized.startsWith('+') ? sanitized.slice(1) : sanitized.replace(/^\++/, '');
+            const digitsOnly = sanitizeDigits(stripped);
+            setPhonePrefix(`+${digitsOnly}`);
+          }}
+          editable={!loading}
+          keyboardType="phone-pad"
+        />
+        <View style={styles.verticalDivider} />
+        <TextInput
+          style={styles.phoneInput}
+          placeholder="Enter your phone number"
+          placeholderTextColor="#9CA3AF"
+          value={mobileNumber}
+          onChangeText={(value) => setMobileNumber(value.replace(/[^0-9]/g, ''))}
+          editable={!loading}
+          keyboardType="phone-pad"
+          maxLength={15}
+        />
+      </View>
+
+      <TouchableOpacity onPress={() => router.push('/screens/ForgotPasswordRequest')}>
+        <Text style={styles.forgotPasswordText}>Forgot password?</Text>
       </TouchableOpacity>
 
-      <View style={styles.header}>
-        <Text style={styles.headerText}>Sign in with your phone number</Text>
+      {(infoMessage || errorMessage) && (
+        <Text style={[styles.messageText, infoMessage ? styles.infoText : styles.errorText]}>
+          {infoMessage || errorMessage}
+        </Text>
+      )}
+
+      <TouchableOpacity
+        style={styles.loginButton}
+        onPress={handleSendOtp}
+        disabled={!isFormValid || loading}
+      >
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.loginButtonText}>Log In</Text>
+        )}
+      </TouchableOpacity>
+
+      <View style={styles.orContainer}>
+        <View style={styles.divider} />
+        <Text style={styles.orText}>or</Text>
+        <View style={styles.divider} />
       </View>
 
-      <Text style={localStyles.helperText}>
-        We will send a 6-digit code to verify your number. SMS is not enabled for development builds, so the code appears
-        in app alerts when available.
-      </Text>
+      <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Google Login */ }}>
+        <Image
+          source={require('../../assets/images/google-logo.png')}
+          style={styles.socialIcon}
+          contentFit="contain"
+        />
+        <Text style={styles.socialButtonText}>Continue with Google</Text>
+      </TouchableOpacity>
 
-      <View style={styles.formContainer}>
-        <View style={styles.inputContainer}>
-          <View style={styles.inputGroup}>
-            <TextInput
-              style={[styles.input, localStyles.nameInput]}
-              placeholder="Full Name"
-              placeholderTextColor="rgba(255, 255, 255, 0.5)"
-              value={name}
-              onChangeText={setName}
-              editable={!loading}
-              autoCapitalize="words"
-            />
-          </View>
+      <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Apple Login */ }}>
+        <AntDesign name="apple" size={24} color="#000" />
+        <Text style={styles.socialButtonText}>Continue with Apple</Text>
+      </TouchableOpacity>
 
-          <View style={[styles.inputGroup, localStyles.phoneRow]}>
-            <TextInput
-              style={[styles.input, localStyles.prefixInput]}
-              placeholder="+94"
-              placeholderTextColor="rgba(255, 255, 255, 0.5)"
-              value={phonePrefix}
-              onChangeText={(value) => {
-                const sanitized = value.replace(/[^0-9+]/g, '');
-                const stripped = sanitized.startsWith('+') ? sanitized.slice(1) : sanitized.replace(/^\++/, '');
-                const digitsOnly = sanitizeDigits(stripped);
-                setPhonePrefix(`+${digitsOnly}`);
-              }}
-              editable={!loading}
-              keyboardType="phone-pad"
-            />
-            <TextInput
-              style={[styles.input, localStyles.phoneInput]}
-              placeholder="Phone number"
-              placeholderTextColor="rgba(255, 255, 255, 0.5)"
-              value={mobileNumber}
-              onChangeText={(value) => setMobileNumber(value.replace(/[^0-9]/g, ''))}
-              editable={!loading}
-              keyboardType="phone-pad"
-              maxLength={15}
-            />
-          </View>
-
-          <TouchableOpacity style={styles.forgotPasswordButton} onPress={() => router.push('/screens/ForgotPasswordRequest')}>
-            <Text style={styles.forgotPasswordText}>Forgot password?</Text>
-          </TouchableOpacity>
-
-          {(infoMessage || errorMessage) && (
-            <Text
-              style={[
-                styles.messageText,
-                infoMessage ? styles.infoText : styles.errorText,
-              ]}
-            >
-              {infoMessage || errorMessage}
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.bottomContainer}>
-          <TouchableOpacity
-            style={[styles.continueButton, isFormValid && styles.continueButtonActive]}
-            onPress={handleSendOtp}
-            disabled={!isFormValid || loading}
-          >
-            {loading ? (
-              <ActivityIndicator color={isFormValid ? '#8B5CF6' : '#fff'} />
-            ) : (
-              <Text style={[styles.continueButtonText, isFormValid && styles.continueButtonTextActive]}>
-                Send OTP
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => router.push('/screens/LogInScreen')}>
-            <Text style={styles.phoneSignInText}>Sign in with Email</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={styles.signUpContainer}>
+        <Text style={styles.signUpText}>Don't have an account?</Text>
+        <TouchableOpacity onPress={() => router.push('/screens/RegisterScreen')}>
+          <Text style={styles.signUpLink}>Register</Text>
+        </TouchableOpacity>
       </View>
+
     </ScrollView>
   );
 };
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  contentContainer: {
+    paddingHorizontal: 24,
+    paddingTop: 80,
+    paddingBottom: 40,
+    flexGrow: 1,
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 40,
+  },
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  logoImage: {
+    width: 150,
+    height: 150,
+  },
+  tagline: {
+    fontSize: 16,
+    color: '#1E3A8A',
+    fontWeight: '500',
+  },
+  label: {
+    fontSize: 14,
+    color: '#1E3A8A',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+  },
+  phoneRow: {
+    paddingHorizontal: 0,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#374151',
+  },
+  prefixInput: {
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    color: '#374151',
+    width: 60,
+    textAlign: 'center',
+  },
+  verticalDivider: {
+    width: 1,
+    height: '60%',
+    backgroundColor: '#E5E7EB',
+  },
+  phoneInput: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    color: '#374151',
+  },
+  forgotPasswordText: {
+    color: '#6366F1',
+    fontWeight: '500',
+    marginBottom: 24,
+  },
+  loginButton: {
+    backgroundColor: '#113C9C',
+    borderRadius: 14,
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  loginButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  orContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E5E7EB',
+  },
+  orText: {
+    marginHorizontal: 12,
+    color: '#9CA3AF',
+    fontSize: 14,
+  },
+  socialButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 25,
+    paddingVertical: 12,
+    marginBottom: 12,
+    backgroundColor: '#fff',
+  },
+  socialIcon: {
+    width: 24,
+    height: 24,
+  },
+  socialButtonText: {
+    marginLeft: 12,
+    fontSize: 16,
+    color: '#374151',
+    fontWeight: '500',
+  },
+  messageText: {
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  infoText: {
+    color: '#059669',
+  },
+  errorText: {
+    color: '#DC2626',
+  },
+  signUpContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 20,
+    gap: 4
+  },
+  signUpText: {
+    color: '#6B7280'
+  },
+  signUpLink: {
+    color: '#1E40AF',
+    fontWeight: 'bold'
+  }
+});
 
 export default MobileLogInScreen;

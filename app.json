@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "LocationTrackerApp",
-    "slug": "LocationTrackerApp",
+    "name": "Nearu",
+    "slug": "Nearu",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "locationtrackerapp",
+    "scheme": "Nearu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -29,7 +29,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.sadeepa_123.LocationTrackerApp"
+      "package": "com.Nearu"
     },
     "web": {
       "output": "static",

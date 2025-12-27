@@ -47,7 +47,7 @@ export default function WalkthroughScreen() {
     const [currentIndex, setCurrentIndex] = useState(0);
 
     // Placeholder video URL - User should replace this
-    const VIDEO_SOURCE = { uri: 'https://videos.pexels.com/video-files/3129957/3129957-sd_360_640_25fps.mp4' };
+    const VIDEO_SOURCE = require('../../assets/backgroundvideo/bg.mp4');
 
     const handleNext = () => {
         if (currentIndex < SLIDES.length - 1) {
@@ -208,10 +208,10 @@ const styles = StyleSheet.create({
         opacity: 0.5,
     },
     button: {
-        backgroundColor: '#1d4ed8', // Darker blue
+        backgroundColor: '#113C9C',
         width: '100%',
         height: 56,
-        borderRadius: 28,
+        borderRadius: 14,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
