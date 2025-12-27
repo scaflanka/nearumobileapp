@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "225825233910",
+    "project_id": "life-360-push-notifier",
+    "storage_bucket": "life-360-push-notifier.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:225825233910:android:e0904758d838dff81245d7",
+        "android_client_info": {
+          "package_name": "com.sadeepa_123.LocationTrackerApp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAFMETFgK6K2JPa0DpOhqfDZDNEub_T-cs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
