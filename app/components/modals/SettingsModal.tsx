@@ -1,16 +1,16 @@
-import React, { useMemo } from "react";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import React from "react";
 import {
   Modal,
-  View,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  TouchableWithoutFeedback,
-  Switch,
-  StyleSheet,
-  Platform,
+  View
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context";
 
+// Exporting ThemeColors to maintain compatibility with other components
 export type ThemeColors = {
   primary: string;
   accent: string;
@@ -24,176 +24,176 @@ export type ThemeColors = {
 interface SettingsModalProps {
   visible: boolean;
   onClose: () => void;
-  notificationsEnabled: boolean;
-  onToggleNotifications: (value: boolean) => void;
-  isUpdatingNotifications: boolean;
-  locationSharingEnabled: boolean;
-  onToggleLocationSharing: (value: boolean) => void;
-  isUpdatingLocationSharing: boolean;
-  colors: ThemeColors;
+  onSmartNotifications: () => void;
+  onLocationSharing?: () => void;
+  onCircleManagement?: () => void;
+  onAddPeople?: () => void;
+  onAccount?: () => void;
+  onDriveDetection?: () => void;
+  onPrivacySecurity?: () => void;
+  onChatSupport?: () => void;
+  onAbout?: () => void;
+  onLogout?: () => void;
+  colors?: ThemeColors; // Optional, can use default if not provided
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({
   visible,
   onClose,
-  notificationsEnabled,
-  onToggleNotifications,
-  isUpdatingNotifications,
-  locationSharingEnabled,
-  onToggleLocationSharing,
-  isUpdatingLocationSharing,
-  colors,
+  onSmartNotifications,
+  onLocationSharing,
+  onCircleManagement,
+  onAddPeople,
+  onAccount,
+  onDriveDetection,
+  onPrivacySecurity,
+  onChatSupport,
+  onAbout,
+  onLogout,
 }) => {
-  const styles = useMemo(() => createStyles(colors), [colors]);
-
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <TouchableWithoutFeedback onPress={onClose}>
-          <View style={styles.backdrop} />
-        </TouchableWithoutFeedback>
-
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <Text style={styles.title}>Settings</Text>
-            <TouchableOpacity
-              onPress={onClose}
-              style={styles.closeButton}
-              accessibilityRole="button"
-              accessibilityLabel="Close settings"
-            >
-              <Ionicons name="close" size={18} color={colors.black} />
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.subtitle}>Choose how we share updates with your circle.</Text>
-
-          <View style={styles.toggleRow}>
-            <View style={styles.toggleTextWrapper}>
-              <Text style={styles.toggleTitle}>Notifications</Text>
-              <Text style={styles.toggleDescription}>
-                Receive arrival, SOS, and circle alerts on this device.
-              </Text>
-            </View>
-            <Switch
-              value={notificationsEnabled}
-              onValueChange={onToggleNotifications}
-              disabled={isUpdatingNotifications}
-              trackColor={{ false: "#D1D5DB", true: colors.primary }}
-              thumbColor={
-                Platform.OS === "android"
-                  ? notificationsEnabled
-                    ? colors.white
-                    : "#f4f3f4"
-                  : undefined
-              }
-              ios_backgroundColor="#D1D5DB"
-            />
-          </View>
-
-          <View style={[styles.toggleRow, styles.toggleRowLast]}>
-            <View style={styles.toggleTextWrapper}>
-              <Text style={styles.toggleTitle}>Location sharing</Text>
-              <Text style={styles.toggleDescription}>
-                Share your live location with the selected circle.
-              </Text>
-            </View>
-            <Switch
-              value={locationSharingEnabled}
-              onValueChange={onToggleLocationSharing}
-              disabled={isUpdatingLocationSharing}
-              trackColor={{ false: "#D1D5DB", true: colors.primary }}
-              thumbColor={
-                Platform.OS === "android"
-                  ? locationSharingEnabled
-                    ? colors.white
-                    : "#f4f3f4"
-                  : undefined
-              }
-              ios_backgroundColor="#D1D5DB"
-            />
-          </View>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+      <SafeAreaView style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Ionicons name="close" size={24} color="#113C9C" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Settings</Text>
+          <View style={{ width: 40 }} />
         </View>
-      </View>
+
+        <ScrollView contentContainerStyle={styles.content}>
+
+          {/* Circle Settings Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionHeader}>Circle Settings</Text>
+
+            <SettingsItem
+              icon={<Ionicons name="people-outline" size={22} color="#113C9C" />}
+              label="Smart Notifications"
+              onPress={onSmartNotifications}
+            />
+            <SettingsItem
+              icon={<MaterialCommunityIcons name="car-connected" size={22} color="#113C9C" />}
+              label="Location Sharing"
+              onPress={onLocationSharing}
+            />
+            <SettingsItem
+              icon={<Ionicons name="information-circle-outline" size={24} color="#113C9C" />}
+              label="Circle Management"
+              onPress={onCircleManagement}
+            />
+            <SettingsItem
+              icon={<Ionicons name="help-circle-outline" size={24} color="#113C9C" />}
+              label="Add People to Circle"
+              onPress={onAddPeople}
+            />
+          </View>
+
+          {/* App Settings Section */}
+          <View style={styles.section}>
+            <Text style={styles.sectionHeader}>App Settings</Text>
+
+            <SettingsItem
+              icon={<Ionicons name="person-outline" size={22} color="#113C9C" />}
+              label="Account"
+              onPress={onAccount}
+            />
+            <SettingsItem
+              icon={<MaterialCommunityIcons name="car-traction-control" size={22} color="#113C9C" />}
+              label="Drive Detection"
+              onPress={onDriveDetection}
+            />
+            <SettingsItem
+              icon={<Ionicons name="shield-checkmark-outline" size={22} color="#113C9C" />}
+              label="Privacy & Security"
+              onPress={onPrivacySecurity}
+            />
+            <SettingsItem
+              icon={<Ionicons name="chatbubble-ellipses-outline" size={22} color="#113C9C" />}
+              label="Chat with support"
+              onPress={onChatSupport}
+            />
+            <SettingsItem
+              icon={<Ionicons name="information-circle-outline" size={24} color="#113C9C" />}
+              label="About"
+              onPress={onAbout}
+            />
+            <SettingsItem
+              icon={<Ionicons name="log-out-outline" size={24} color="#113C9C" />}
+              label="Log out"
+              onPress={onLogout}
+            />
+          </View>
+
+        </ScrollView>
+      </SafeAreaView>
     </Modal>
   );
 };
 
-const createStyles = (colors: ThemeColors) =>
-  StyleSheet.create({
-    overlay: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.4)",
-      justifyContent: "center",
-      alignItems: "center",
-      paddingHorizontal: 20,
-    },
-    backdrop: {
-      ...StyleSheet.absoluteFillObject,
-    },
-    card: {
-      width: "100%",
-      backgroundColor: colors.white,
-      borderRadius: 18,
-      paddingHorizontal: 20,
-      paddingTop: 20,
-      paddingBottom: 24,
-      elevation: 6,
-      shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.2,
-      shadowRadius: 6,
-    },
-    headerRow: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 12,
-    },
-    title: {
-      fontSize: 20,
-      fontWeight: "700",
-      color: colors.black,
-    },
-    closeButton: {
-      width: 32,
-      height: 32,
-      borderRadius: 16,
-      backgroundColor: colors.lightGray,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    subtitle: {
-      fontSize: 13,
-      color: colors.gray,
-      marginBottom: 18,
-    },
-    toggleRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingVertical: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.lightGray,
-    },
-    toggleRowLast: {
-      borderBottomWidth: 0,
-      paddingBottom: 0,
-    },
-    toggleTextWrapper: {
-      flex: 1,
-      paddingRight: 16,
-    },
-    toggleTitle: {
-      fontSize: 16,
-      fontWeight: "600",
-      color: colors.black,
-    },
-    toggleDescription: {
-      fontSize: 13,
-      color: colors.gray,
-      marginTop: 4,
-    },
-  });
+const SettingsItem = ({ icon, label, onPress }: { icon: React.ReactNode, label: string, onPress?: () => void }) => (
+  <TouchableOpacity style={styles.itemRow} onPress={onPress}>
+    <View style={styles.iconContainer}>
+      {icon}
+    </View>
+    <Text style={styles.itemLabel}>{label}</Text>
+  </TouchableOpacity>
+);
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f3f4f6",
+  },
+  closeButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#113C9C",
+  },
+  content: {
+    padding: 20,
+  },
+  section: {
+    marginBottom: 32,
+  },
+  sectionHeader: {
+    fontSize: 14,
+    color: "#113C9C",
+    fontWeight: "600",
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+    paddingBottom: 8,
+  },
+  itemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  iconContainer: {
+    width: 30,
+    alignItems: "center",
+    marginRight: 16,
+  },
+  itemLabel: {
+    fontSize: 16,
+    color: "#4b5563",
+    fontWeight: "400",
+  },
+});
 
 export default SettingsModal;

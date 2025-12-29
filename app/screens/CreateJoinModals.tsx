@@ -1,16 +1,16 @@
-import React, { useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
+import React, { useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  TextInput,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Modal,
   Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
 
 const COLORS = {
   primary: "#4F359B",
@@ -145,25 +145,27 @@ interface JoinCircleModalProps {
   onJoin: (pin: string) => Promise<void>;
 }
 
+// ==================== JOIN CIRCLE MODAL ====================
+interface JoinCircleModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onJoin: (pin: string) => Promise<void>;
+}
+
 export const JoinCircleModal: React.FC<JoinCircleModalProps> = ({
   isOpen,
   onClose,
   onJoin,
 }) => {
-  const [pin, setPin] = useState("");
+  const [otp, setOtp] = useState<string[]>(new Array(6).fill(""));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const handlePinChange = (text: string) => {
-    // Only allow numbers and limit to 6 digits
-    const cleaned = text.replace(/[^0-9]/g, "").slice(0, 6);
-    setPin(cleaned);
-    setError("");
-  };
+  const inputRefs = useRef<Array<TextInput | null>>([]);
 
   const handleJoin = async () => {
+    const pin = otp.join("");
     if (pin.length !== 6) {
-      setError("Please enter a 6-digit PIN");
+      setError("Please enter a complete 6-digit PIN");
       return;
     }
 
@@ -171,7 +173,7 @@ export const JoinCircleModal: React.FC<JoinCircleModalProps> = ({
       setLoading(true);
       setError("");
       await onJoin(pin);
-      setPin("");
+      setOtp(new Array(6).fill(""));
       onClose();
     } catch (err: any) {
       setError(err.message || "Invalid PIN or failed to join circle");
@@ -181,9 +183,35 @@ export const JoinCircleModal: React.FC<JoinCircleModalProps> = ({
   };
 
   const handleClose = () => {
-    setPin("");
+    setOtp(new Array(6).fill(""));
     setError("");
     onClose();
+  };
+
+  const handleChange = (text: string, index: number) => {
+    // Only allow numbers
+    if (!/^\d*$/.test(text)) return;
+
+    const newOtp = [...otp];
+    newOtp[index] = text;
+    setOtp(newOtp);
+    setError("");
+
+    // Move to next input if text is entered
+    if (text && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleKeyPress = (e: any, index: number) => {
+    if (e.nativeEvent.key === "Backspace") {
+      if (!otp[index] && index > 0) {
+        inputRefs.current[index - 1]?.focus();
+        const newOtp = [...otp];
+        newOtp[index - 1] = "";
+        setOtp(newOtp);
+      }
+    }
   };
 
   return (
@@ -206,60 +234,93 @@ export const JoinCircleModal: React.FC<JoinCircleModalProps> = ({
         <View style={styles.modalContent}>
           {/* Header */}
           <View style={styles.modalHeader}>
-            <View style={styles.modalIconCircle}>
-              <Ionicons name="key" size={28} color={COLORS.primary} />
-            </View>
-            <Text style={styles.modalTitle}>Join a Circle</Text>
-            <Text style={styles.modalSubtitle}>
-              Enter the 6-digit PIN shared by the circle creator
-            </Text>
+            <TouchableOpacity
+              style={styles.backButtonHeader}
+              onPress={handleClose}
+            >
+              <View style={styles.backButtonContent}>
+                <Ionicons name="chevron-back" size={24} color={COLORS.primary} />
+                <Text style={styles.backButtonTextHeader}>Back</Text>
+              </View>
+            </TouchableOpacity>
+
+            <Text style={styles.modalTitle}>Enter the Invite Code</Text>
           </View>
 
           {/* PIN Input */}
           <View style={styles.inputContainer}>
-            <Text style={styles.inputLabel}>Circle PIN</Text>
-            <View style={styles.pinInputContainer}>
-              <TextInput
-                style={styles.pinInput}
-                placeholder="000000"
-                placeholderTextColor={COLORS.gray}
-                value={pin}
-                onChangeText={handlePinChange}
-                keyboardType="number-pad"
-                maxLength={6}
-                autoFocus
-              />
+            <View style={styles.otpContainer}>
+              {/* First group of 3 */}
+              {otp.slice(0, 3).map((digit, index) => (
+                <View key={index} style={styles.otpBox}>
+                  <TextInput
+                    ref={(ref) => {
+                      inputRefs.current[index] = ref;
+                    }}
+                    style={styles.otpInput}
+                    value={digit}
+                    onChangeText={(text) => handleChange(text, index)}
+                    onKeyPress={(e) => handleKeyPress(e, index)}
+                    keyboardType="number-pad"
+                    maxLength={1}
+                    selectTextOnFocus
+                    editable={!loading}
+                  />
+                </View>
+              ))}
+
+              <Text style={styles.otpDash}>-</Text>
+
+              {/* Second group of 3 */}
+              {otp.slice(3, 6).map((digit, index) => {
+                const realIndex = index + 3;
+                return (
+                  <View key={realIndex} style={styles.otpBox}>
+                    <TextInput
+                      ref={(ref) => {
+                        inputRefs.current[realIndex] = ref;
+                      }}
+                      style={styles.otpInput}
+                      value={digit}
+                      onChangeText={(text) => handleChange(text, realIndex)}
+                      onKeyPress={(e) => handleKeyPress(e, realIndex)}
+                      keyboardType="number-pad"
+                      maxLength={1}
+                      selectTextOnFocus
+                      editable={!loading}
+                    />
+                  </View>
+                );
+              })}
             </View>
+
+            <Text style={styles.helperText}>
+              Get the code from the{'\n'}person setting up circle
+            </Text>
+
             {error ? <Text style={styles.errorText}>{error}</Text> : null}
-            
-            <View style={styles.pinInfo}>
-              <Ionicons name="information-circle" size={16} color={COLORS.gray} />
-              <Text style={styles.pinInfoText}>
-                Ask the circle creator for the PIN
-              </Text>
-            </View>
           </View>
 
           {/* Buttons */}
-          <View style={styles.modalButtons}>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.cancelButton]}
-              onPress={handleClose}
-              disabled={loading}
-            >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-
+          <View style={styles.modalButtonsColumn}>
             <TouchableOpacity
               style={[styles.modalButton, styles.createButton]}
               onPress={handleJoin}
-              disabled={loading || pin.length !== 6}
+              disabled={loading}
             >
               {loading ? (
                 <ActivityIndicator color={COLORS.white} size="small" />
               ) : (
-                <Text style={styles.createButtonText}>Join Circle</Text>
+                <Text style={styles.createButtonText}>Continue</Text>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.skipButton}
+              onPress={handleClose}
+              disabled={loading}
+            >
+              <Text style={styles.skipButtonText}>Skip for Now</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -338,49 +399,84 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  pinInputContainer: {
+  // New styles for split OTP input
+  otpContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+    gap: 8,
+  },
+  otpBox: {
+    width: 45,
+    height: 55,
+    borderRadius: 8,
+    backgroundColor: "#E8F0FE", // Light blue tint like screenshot
+    justifyContent: "center",
     alignItems: "center",
   },
-  pinInput: {
-    backgroundColor: COLORS.lightGray,
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    fontSize: 28,
-    fontWeight: "700",
-    color: COLORS.black,
-    borderWidth: 2,
-    borderColor: COLORS.border,
+  otpInput: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: COLORS.primary,
     textAlign: "center",
-    letterSpacing: 8,
     width: "100%",
+    height: "100%",
+  },
+  otpDash: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: COLORS.gray,
+    marginHorizontal: 4,
+  },
+  helperText: {
+    textAlign: "center",
+    color: COLORS.primary,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 10,
   },
   errorText: {
     fontSize: 12,
     color: COLORS.error,
     marginTop: 6,
     marginLeft: 4,
+    textAlign: "center",
   },
-  pinInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 12,
-    gap: 6,
-  },
-  pinInfoText: {
-    fontSize: 13,
-    color: COLORS.gray,
-  },
+  // Button styles update
   modalButtons: {
     flexDirection: "row",
     gap: 12,
   },
+  modalButtonsColumn: {
+    flexDirection: "column",
+    gap: 16,
+    width: "100%",
+  },
   modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
+    width: "100%",
+    paddingVertical: 16,
+    borderRadius: 30, // More rounded for "Continue" button
     alignItems: "center",
     justifyContent: "center",
+  },
+  createButton: {
+    backgroundColor: COLORS.primary,
+  },
+  createButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: COLORS.white,
+  },
+  // Skip button
+  skipButton: {
+    alignItems: 'center',
+    padding: 8,
+  },
+  skipButtonText: {
+    color: COLORS.primary,
+    fontSize: 16,
+    fontWeight: "500",
   },
   cancelButton: {
     backgroundColor: COLORS.lightGray,
@@ -392,13 +488,21 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: COLORS.gray,
   },
-  createButton: {
-    backgroundColor: COLORS.primary,
+  // Header updates
+  backButtonHeader: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    zIndex: 10,
   },
-  createButtonText: {
+  backButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  backButtonTextHeader: {
+    color: COLORS.primary,
     fontSize: 16,
-    fontWeight: "600",
-    color: COLORS.white,
+    marginLeft: 4,
   },
 });
 

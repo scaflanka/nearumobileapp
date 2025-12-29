@@ -1,4 +1,5 @@
 // CirclesModal.tsx
+import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,14 +10,13 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  RefreshControl,
   ScrollView,
   Share,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../utils/auth";
@@ -189,7 +189,8 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
   const [generatingCode, setGeneratingCode] = useState(false);
 
   // join by code
-  const [joinCode, setJoinCode] = useState("");
+  const [otp, setOtp] = useState<string[]>(new Array(6).fill(""));
+  const inputRefs = useRef<Array<TextInput | null>>([]);
   const [joiningCircle, setJoiningCircle] = useState(false);
 
   // invitations list
@@ -259,6 +260,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
     setCreatingCircle(false);
     setJoiningCircle(false);
     setGeneratingCode(false);
+    setOtp(new Array(6).fill(""));
   };
 
   const handleCircleSelect = (id: number | string) => {
@@ -441,8 +443,9 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
   };
 
   const handleJoinByCode = async () => {
-    if (!joinCode.trim() || joinCode.trim().length < 6) {
-      Alert.alert("Invalid Code", "Enter a valid 6-character code.");
+    const code = otp.join("");
+    if (code.length < 6) {
+      Alert.alert("Invalid Code", "Enter a complete 6-digit invite code.");
       return;
     }
     Keyboard.dismiss();
@@ -451,12 +454,12 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
       const response = await authenticatedFetch(`${API_BASE_URL}/circles/join-by-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ code: joinCode.toUpperCase().trim() }),
+        body: JSON.stringify({ code: code.toUpperCase().trim() }),
       });
       const data = await response.json().catch(() => ({}));
       if (response.ok) {
         Alert.alert("Success", "Joined circle successfully!");
-        setJoinCode("");
+        setOtp(new Array(6).fill(""));
         if (onRefresh) await onRefresh();
         await loadInvitations();
       } else {
@@ -467,6 +470,29 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
       Alert.alert("Error", "Network error.");
     } finally {
       setJoiningCircle(false);
+    }
+  };
+
+  const handleOtpChange = (text: string, index: number) => {
+    if (!/^\d*$/.test(text)) return;
+    const newOtp = [...otp];
+    newOtp[index] = text;
+    setOtp(newOtp);
+
+    // move forward
+    if (text && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyPress = (e: any, index: number) => {
+    if (e.nativeEvent.key === "Backspace") {
+      if (!otp[index] && index > 0) {
+        inputRefs.current[index - 1]?.focus();
+        const newOtp = [...otp];
+        newOtp[index - 1] = "";
+        setOtp(newOtp);
+      }
     }
   };
 
@@ -591,18 +617,39 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
       contentContainerStyle={styles.fullScreenContainer}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.fsTitle}>Name your Circle</Text>
-      <Text style={styles.fsSubtitle}>Give your new circle a recognizable name.</Text>
+      {/* Header with Back */}
+      <View style={styles.invitationsHeaderRow}>
+        <TouchableOpacity
+          style={styles.backButtonSimple}
+          onPress={() => setCurrentView("list")}
+        >
+          <Ionicons name="chevron-back" size={24} color="#2563eb" />
+          <Text style={styles.backButtonSimpleText}>Back</Text>
+        </TouchableOpacity>
+      </View>
 
-      <TextInput
-        style={styles.fsInput}
-        placeholder="Ex: Family, Marketing Team..."
-        placeholderTextColor="#9CA3AF"
-        value={newCircleName}
-        onChangeText={setNewCircleName}
-        autoFocus
-      />
-      <Text style={styles.suggestionLabel}>Suggestions:</Text>
+      <Text style={styles.createTitle}>Create a New Circle</Text>
+
+      <View style={styles.createFormSection}>
+        <Text style={styles.inputLabelSimple}>Circle Name</Text>
+        <TextInput
+          style={styles.createInputSimple}
+          placeholder="My Family"
+          placeholderTextColor="#9CA3AF"
+          value={newCircleName}
+          onChangeText={setNewCircleName}
+          autoFocus
+        />
+
+        <View style={styles.privacyBox}>
+          <Text style={styles.privacyTitle}>Privacy First:</Text>
+          <Text style={styles.privacyText}>
+            Your location is only shared with family members you invite. You can leave or remove members anytime.
+          </Text>
+        </View>
+      </View>
+
+      <Text style={[styles.suggestionLabel, { marginTop: 20 }]}>Suggestions:</Text>
       <View style={styles.suggestionRow}>
         {CIRCLE_NAME_SUGGESTIONS.map((name) => (
           <TouchableOpacity key={name} style={styles.suggestionChip} onPress={() => handleCreateCircle(name)}>
@@ -614,15 +661,11 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
       <View style={{ flex: 1 }} />
 
       <TouchableOpacity
-        style={[styles.primaryButton, creatingCircle && styles.buttonDisabled]}
+        style={[styles.continueButton, creatingCircle && styles.buttonDisabled]}
         onPress={() => handleCreateCircle()}
         disabled={creatingCircle}
       >
-        {creatingCircle ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Create Circle</Text>}
-      </TouchableOpacity>
-
-      <TouchableOpacity style={styles.textBtn} onPress={() => setCurrentView("list")}>
-        <Text style={styles.textBtnText}>Cancel</Text>
+        {creatingCircle ? <ActivityIndicator color="#fff" /> : <Text style={styles.continueButtonText}>Continue</Text>}
       </TouchableOpacity>
     </ScrollView>
   );
@@ -631,198 +674,190 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
     const hasCode = Boolean(generatedCode);
     const expiryDate = codeExpiry ? new Date(codeExpiry) : null;
     const isCodeExpired = hasCode && expiryDate ? expiryDate.getTime() <= Date.now() : false;
+
+    // Dynamic naming logic
+    const circleName = createdCircleData?.name || "Family";
+    const shareHeading = `Invite members to the ${circleName} Circle`;
+
+    // We display "This code will be active for 2 days" as per design statically or check text.
+    // The image shows specific text. We can stick to dynamic if we have real expiry, 
+    // but the design image has that specific caption. I'll use a variable for it or just text.
     const formattedExpiry = expiryDate
-      ? `${isCodeExpired ? "Expired" : "Expires"} ${expiryDate.toLocaleString()}`
-      : null;
-    const shareHeading = createdCircleData?.name ? `Invite to ${createdCircleData.name}` : "Invite to your circle";
-    const shareIcon = !hasCode ? "🤝" : isCodeExpired ? "⌛" : "🎉";
+      ? `This code will be active until ${expiryDate.toLocaleDateString()}`
+      : "This code will be active for 2 days";
+
     return (
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={styles.fullScreenContainer}>
-          <View style={styles.successHeader}>
-            <Text style={styles.successIcon}>{shareIcon}</Text>
-            <Text style={styles.fsTitle}>{shareHeading}</Text>
-            {!hasCode && (
-              <Text style={styles.shareSubheading}>
-                Send email invitations so members see this circle in their app.
-              </Text>
-            )}
-          </View>
+        <ScrollView contentContainerStyle={styles.fullScreenContainer} keyboardShouldPersistTaps="handled">
 
-          <View style={styles.codeDisplayContainer}>
-            {hasCode ? (
-              <>
-                <Text style={styles.codeLabel}>Invite Code:</Text>
-                <Text style={styles.codeTextH1}>{generatedCode}</Text>
-                {formattedExpiry && <Text style={styles.codeExpiry}>{formattedExpiry}</Text>}
-                {isCodeExpired ? (
-                  <>
-                    <Text style={styles.shareWarningText}>
-                      Invitation code expired. Please generate a new code.
-                    </Text>
-                    <TouchableOpacity
-                      style={[styles.primaryButton, generatingCode && styles.buttonDisabled, { marginTop: 12 }]}
-                      onPress={handleGenerateInvitationCode}
-                      disabled={generatingCode}
-                    >
-                      {generatingCode ? (
-                        <ActivityIndicator color="#fff" />
-                      ) : (
-                        <Text style={styles.primaryButtonText}>Generate New Code</Text>
-                      )}
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <TouchableOpacity style={styles.shareBtn} onPress={onShareCode}>
-                    <Text style={styles.shareBtnText}>Share Code 📤</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            ) : (
-              <>
-                <Text style={styles.codeLabel}>Invite code not available</Text>
-                <Text style={styles.shareInfoText}>
-                  Email invitations deliver access directly—no join code required.
-                </Text>
-                <TouchableOpacity
-                  style={[styles.primaryButton, generatingCode && styles.buttonDisabled, { marginTop: 16 }]}
-                  onPress={handleGenerateInvitationCode}
-                  disabled={generatingCode}
-                >
-                  {generatingCode ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.primaryButtonText}>Generate Invitation Code</Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-
-          <View style={styles.inviteForm}>
-            <Text style={styles.sectionTitle}>Invite via Email</Text>
-            <TextInput
-              style={styles.formInput}
-              placeholder="Email Address (Required)"
-              placeholderTextColor="#9CA3AF"
-              value={inviteEmail}
-              onChangeText={setInviteEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            <View style={styles.rowInputs}>
-              <TextInput
-                style={[styles.formInput, { flex: 1, marginRight: 8 }]}
-                placeholder="Nickname (Opt)"
-                placeholderTextColor="#9CA3AF"
-                value={inviteNickname}
-                onChangeText={setInviteNickname}
-              />
-              <View style={[styles.formInput, { justifyContent: "center", paddingVertical: 0, width: 100 }]}>
-                <Text style={{ color: "#666" }}>{inviteRole}</Text>
-              </View>
-            </View>
-
+          {/* Header with Back */}
+          <View style={styles.invitationsHeaderRow}>
             <TouchableOpacity
-              style={[styles.primaryButton, sendingInvite && styles.buttonDisabled, { marginTop: 10 }]}
-              onPress={handleSendInvite}
-              disabled={sendingInvite}
+              style={styles.backButtonSimple}
+              onPress={() => setCurrentView("list")}
             >
-              {sendingInvite ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Send Email Invite</Text>}
+              <Ionicons name="chevron-back" size={24} color="#113C9C" />
+              <Text style={[styles.backButtonSimpleText, { color: '#113C9C' }]}>Back</Text>
             </TouchableOpacity>
           </View>
 
-          <View style={{ height: 20 }} />
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => {
-              resetStates();
-              if (onRefresh) onRefresh();
-            }}
-          >
-            <Text style={styles.secondaryButtonText}>Done</Text>
-          </TouchableOpacity>
+          <View style={styles.successHeader}>
+            <Text style={styles.inviteMemberTitle}>{shareHeading}</Text>
+            <Text style={styles.inviteMemberSubtitle}>
+              Share your code or send it in a message, email or in-App
+            </Text>
+          </View>
+
+          <View style={styles.codeDisplayContainerLightBlue}>
+            {hasCode ? (
+              <>
+                <Text style={styles.codeTextBlueH1}>{generatedCode}</Text>
+
+                <Text style={styles.codeExpiryBlue}>
+                  This code will be active for 2 days
+                </Text>
+
+                {isCodeExpired && (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={styles.shareWarningText}>Code Expired</Text>
+                    <TouchableOpacity onPress={handleGenerateInvitationCode}>
+                      <Text style={{ color: '#113C9C', textDecorationLine: 'underline' }}>Generate New</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
+            ) : (
+              <View style={{ alignItems: 'center' }}>
+                <ActivityIndicator color="#113C9C" />
+                <Text style={{ color: '#113C9C', marginTop: 10 }}>Generating code...</Text>
+              </View>
+            )}
+          </View>
+
+          {hasCode && !isCodeExpired && (
+            <TouchableOpacity style={styles.shareBtn} onPress={onShareCode}>
+              <Text style={styles.shareBtnText}>Share Code</Text>
+            </TouchableOpacity>
+          )}
+
+          <View style={{ flex: 1 }} />
+
         </ScrollView>
       </KeyboardAvoidingView>
     );
   };
-
   const renderInvitationsContent = () => (
-    <View style={{ flex: 1 }}>
-      <View style={styles.joinCodeContainer}>
-        <Text style={styles.inputLabel}>Join via Code</Text>
-        <View style={styles.joinCodeRow}>
-          <TextInput
-            style={styles.codeInput}
-            placeholder="ABC123"
-            placeholderTextColor="#9CA3AF"
-            value={joinCode}
-            onChangeText={setJoinCode}
-            maxLength={6}
-            autoCapitalize="characters"
-            autoCorrect={false}
-          />
+    <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+      <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
+        {/* Helper Header for this view */}
+        <View style={styles.invitationsHeaderRow}>
           <TouchableOpacity
-            style={[styles.joinCodeButton, joiningCircle && styles.buttonDisabled]}
+            style={styles.backButtonSimple}
+            onPress={() => setCurrentView("list")}
+          >
+            <Ionicons name="chevron-back" size={24} color="#2563eb" />
+            <Text style={styles.backButtonSimpleText}>Back</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.enterCodeTitle}>Enter the Invite Code</Text>
+
+        <View style={styles.otpSection}>
+          <View style={styles.otpContainer}>
+            {/* First 3 digits */}
+            {otp.slice(0, 3).map((digit, index) => (
+              <View key={index} style={styles.otpBox}>
+                <TextInput
+                  ref={(ref) => { inputRefs.current[index] = ref; }}
+                  style={styles.otpInput}
+                  value={digit}
+                  onChangeText={(text) => handleOtpChange(text, index)}
+                  onKeyPress={(e) => handleOtpKeyPress(e, index)}
+                  keyboardType="number-pad"
+                  maxLength={1}
+                  selectTextOnFocus
+                  editable={!joiningCircle}
+                />
+              </View>
+            ))}
+
+            <Text style={styles.otpDash}>-</Text>
+
+            {/* Next 3 digits */}
+            {otp.slice(3, 6).map((digit, index) => {
+              const realIndex = index + 3;
+              return (
+                <View key={realIndex} style={styles.otpBox}>
+                  <TextInput
+                    ref={(ref) => { inputRefs.current[realIndex] = ref; }}
+                    style={styles.otpInput}
+                    value={digit}
+                    onChangeText={(text) => handleOtpChange(text, realIndex)}
+                    onKeyPress={(e) => handleOtpKeyPress(e, realIndex)}
+                    keyboardType="number-pad"
+                    maxLength={1}
+                    selectTextOnFocus
+                    editable={!joiningCircle}
+                  />
+                </View>
+              );
+            })}
+          </View>
+
+          <Text style={styles.helperText}>
+            Get the code from the{'\n'}person setting up circle
+          </Text>
+        </View>
+
+        <View style={styles.mainActions}>
+          <TouchableOpacity
+            style={[styles.continueButton, joiningCircle && styles.buttonDisabled]}
             onPress={handleJoinByCode}
             disabled={joiningCircle}
           >
-            {joiningCircle ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.joinCodeButtonText}>Join</Text>}
+            {joiningCircle ? <ActivityIndicator color="#fff" /> : <Text style={styles.continueButtonText}>Continue</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.skipButton} onPress={() => onClose()}>
+            <Text style={styles.skipButtonText}>Skip for Now</Text>
           </TouchableOpacity>
         </View>
-      </View>
 
-      <Text style={[styles.inputLabel, { marginTop: 10, marginBottom: 5 }]}>Pending Invites</Text>
-
-      {loadingInvitations ? (
-        <ActivityIndicator size="small" color="#2563eb" style={{ marginTop: 20 }} />
-      ) : (
-        <FlatList
-          data={invitations}
-          keyExtractor={(item) => item.id.toString()}
-          nestedScrollEnabled
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshingInvitations}
-              onRefresh={() => {
-                setRefreshingInvitations(true);
-                loadInvitations();
-              }}
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No pending invitations.</Text>
-            </View>
-          }
-          renderItem={({ item }) => {
-            const cName = item.Circle?.name || item.circleName || "Unknown Circle";
-            const inviter = item.Circle?.creator?.name || item.inviterName || "Someone";
-            const cId = item.circleId || (item as any).circle_id || item.Circle?.id || "";
-            return (
-              <View style={styles.inviteCard}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inviteTitle}>{cName}</Text>
-                  <Text style={styles.inviteSub}>Invited by {inviter}</Text>
-                </View>
-                <View style={styles.inviteActions}>
-                  <TouchableOpacity style={styles.acceptBtn} onPress={() => handleAcceptInvitation(cId)}>
-                    <Text style={styles.btnTextWhite}>✓</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.rejectBtn} onPress={() => handleRejectInvitation(cId)}>
-                    <Text style={styles.btnTextWhite}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          }}
-        />
-      )}
-
-      <TouchableOpacity style={styles.backButton} onPress={() => setCurrentView("list")}>
-        <Text style={styles.backButtonText}>Back to Circles</Text>
-      </TouchableOpacity>
-    </View>
+        {/* Existing Invitations List Below */}
+        <View style={styles.pendingInvitesSection}>
+          <Text style={styles.inputLabel}>Pending Invites ({invitations.length})</Text>
+          {loadingInvitations ? (
+            <ActivityIndicator size="small" color="#2563eb" />
+          ) : (
+            invitations.length === 0 ? (
+              <Text style={styles.emptyTextSub}>No pending invitations.</Text>
+            ) : (
+              invitations.map((item) => {
+                const cName = item.Circle?.name || item.circleName || "Unknown Circle";
+                const inviter = item.Circle?.creator?.name || item.inviterName || "Someone";
+                const cId = item.circleId || (item as any).circle_id || item.Circle?.id || "";
+                return (
+                  <View key={item.id} style={styles.inviteCard}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inviteTitle}>{cName}</Text>
+                      <Text style={styles.inviteSub}>Invited by {inviter}</Text>
+                    </View>
+                    <View style={styles.inviteActions}>
+                      <TouchableOpacity style={styles.acceptBtn} onPress={() => handleAcceptInvitation(cId)}>
+                        <Text style={styles.btnTextWhite}>✓</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.rejectBtn} onPress={() => handleRejectInvitation(cId)}>
+                        <Text style={styles.btnTextWhite}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })
+            )
+          )}
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 
   return (
@@ -830,20 +865,16 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose} />
       <Animated.View style={[styles.topSheetModal, { transform: [{ translateY: modalAnim }] }]}>
         <SafeAreaView style={styles.modalSafeArea} edges={["top"]}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>
-              {currentView === "list"
-                ? "Select Circle"
-                : currentView === "create"
-                  ? "Create Circle"
-                  : currentView === "share"
-                    ? "Invite Members"
-                    : "Invitations"}
-            </Text>
-            <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-              <Text style={styles.closeButtonText}>Close ✕</Text>
-            </TouchableOpacity>
-          </View>
+
+          {/* Only show default header for List view. Create/Invitations/Share have their own inner headers. */}
+          {currentView === "list" && (
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Circle</Text>
+              <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+                <Text style={styles.closeButtonText}>Close ✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.contentContainer}>
             {currentView === "list" && renderListContent()}
@@ -875,7 +906,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: windowHeight * 0.92,
+    height: windowHeight,
     backgroundColor: "#fff",
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
@@ -993,12 +1024,59 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
+  // New Styles for Share Screen Update
+  inviteMemberTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#1e3a8a",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  inviteMemberSubtitle: {
+    fontSize: 15,
+    color: "#64748b",
+    textAlign: "center",
+    paddingHorizontal: 20,
+    lineHeight: 22,
+  },
+  codeDisplayContainerLightBlue: {
+    backgroundColor: "#EFF6FF", // blue-50
+    borderRadius: 24,
+    paddingVertical: 32,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: "#DBEAFE", // blue-100
+    width: '100%',
+  },
+  codeTextBlueH1: {
+    fontSize: 42,
+    fontWeight: "800",
+    color: "#1e3a8a", // blue-900
+    letterSpacing: 4,
+    marginBottom: 12,
+  },
+  codeExpiryBlue: {
+    fontSize: 14,
+    color: "#3b82f6", // blue-500
+    fontWeight: "500",
+  },
   codeLabel: { fontSize: 14, color: "#6b7280", marginBottom: 4 },
   codeTextH1: { fontSize: 36, fontWeight: "800", color: "#111827", letterSpacing: 3, marginVertical: 10 },
   codeExpiry: { fontSize: 12, color: "#ef4444", marginBottom: 16 },
   shareInfoText: { fontSize: 13, color: "#6b7280", textAlign: "center", marginTop: 6 },
   shareWarningText: { fontSize: 13, color: "#b91c1c", textAlign: "center", marginTop: 8 },
-  shareBtn: { backgroundColor: "#2563eb", paddingHorizontal: 30, paddingVertical: 12, borderRadius: 8 },
+  shareBtn: {
+    backgroundColor: "#113C9C",
+    paddingVertical: 16,
+    paddingBottom: 15.97,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    // width: 366,
+    width: '100%',
+  },
   shareBtnText: { color: "#fff", fontWeight: "600", fontSize: 16 },
 
   inviteForm: { marginBottom: 20 },
@@ -1019,28 +1097,28 @@ const styles = StyleSheet.create({
   // Buttons
   actionButtonsContainer: { flexDirection: "row", gap: 12, alignItems: "flex-end" },
   primaryButton: {
-    backgroundColor: "#2563eb",
-    paddingVertical: 14,
-    borderRadius: 12,
+    backgroundColor: "#113C9C",
+    paddingVertical: 16,
+    paddingBottom: 15.97,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     elevation: 2,
-    paddingHorizontal: 16,
+    // width: 366, // Using percentage for responsiveness
+    width: '100%',
   },
   primaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 16 },
   secondaryButton: {
     flex: 1,
-    backgroundColor: "#8B5CF6",
-    paddingVertical: 14,
-    borderRadius: 12,
+    backgroundColor: "#113C9C",
+    paddingVertical: 16,
+    paddingBottom: 15.97,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 1,
-    color: "#fff",
-    borderColor: "#8B5CF6",
     marginLeft: 8,
   },
-  secondaryButtonText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  secondaryButtonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
   buttonDisabled: { opacity: 0.6 },
   textBtn: { alignItems: "center", padding: 15 },
   textBtnText: { color: "#6b7280", fontSize: 16 },
@@ -1098,4 +1176,155 @@ const styles = StyleSheet.create({
   backButton: { marginTop: 10, padding: 15, alignItems: "center" },
   backButtonText: { color: "#6b7280", fontWeight: "600" },
   emptyContainer: { padding: 20, alignItems: "center" },
+  // --- New Styles for Join UI ---
+  invitationsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  backButtonSimple: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    marginLeft: -8,
+  },
+  backButtonSimpleText: {
+    fontSize: 16,
+    color: '#2563eb',
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  enterCodeTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1e3a8a', // Dark blue title
+    textAlign: 'center',
+    marginBottom: 40,
+  },
+  otpSection: {
+    marginBottom: 40,
+    alignItems: 'center',
+  },
+  otpContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 24,
+    gap: 8,
+  },
+  otpBox: {
+    width: 45,
+    height: 55,
+    borderRadius: 8,
+    backgroundColor: "#E8F0FE", // Light blue tint
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  otpInput: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#2563eb",
+    textAlign: "center",
+    width: "100%",
+    height: "100%",
+  },
+  otpDash: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#9ca3af",
+    marginHorizontal: 4,
+  },
+  helperText: {
+    textAlign: "center",
+    color: "#1e3a8a",
+    fontSize: 14,
+    lineHeight: 20,
+    maxWidth: '70%',
+  },
+  mainActions: {
+    width: '100%',
+    paddingHorizontal: 20,
+    marginBottom: 30,
+    gap: 16,
+  },
+  continueButton: {
+    backgroundColor: "#113C9C",
+    paddingVertical: 16,
+    paddingBottom: 15.97,
+    borderRadius: 14,
+    alignItems: "center",
+    width: '100%',
+  },
+  continueButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  skipButton: {
+    alignItems: 'center',
+    padding: 10,
+  },
+  skipButtonText: {
+    color: "#1e3a8a",
+    fontSize: 16,
+    fontWeight: "500",
+  },
+  pendingInvitesSection: {
+    marginTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+    paddingTop: 20,
+  },
+
+  emptyTextSub: {
+    textAlign: 'center',
+    color: '#9ca3af',
+    fontStyle: 'italic',
+    padding: 20,
+  },
+  // --- Create Screen New Styles ---
+  createTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    marginBottom: 24,
+    marginTop: 10,
+  },
+  createFormSection: {
+    marginBottom: 10,
+  },
+  inputLabelSimple: {
+    fontSize: 15,
+    color: '#475569',
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  createInputSimple: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#1e293b',
+    marginBottom: 24,
+  },
+  privacyBox: {
+    backgroundColor: '#E8F0FE', // Light blue
+    borderRadius: 16,
+    padding: 20,
+  },
+  privacyTitle: {
+    color: '#1e3a8a',
+    fontWeight: '600',
+    fontSize: 15,
+    marginBottom: 6,
+  },
+  privacyText: {
+    color: '#1e3a8a',
+    fontSize: 14,
+    lineHeight: 22,
+    opacity: 0.9,
+  },
 });

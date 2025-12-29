@@ -46,7 +46,11 @@ import {
 import { storeLastKnownLocation } from "../../utils/locationCache";
 import { setNotificationReceptionEnabled } from "../../utils/notificationListeners";
 import { requestNotificationPermissions } from "../../utils/permissions";
-import AccountActionsModal from "../components/modals/AccountActionsModal";
+import NotificationIcon from "../components/icons/NotificationIcon";
+import AccountModal from "../components/modals/AccountModal";
+import { NotificationsModal } from "../components/modals/NotificationsModal";
+import SettingsModal from "../components/modals/SettingsModal";
+
 import {
   AssignedLocationDetails,
   AssignedLocationRecord,
@@ -395,7 +399,7 @@ const MID_HEIGHT = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) / 2;
 const INITIAL_SHEET_HEIGHT = MID_HEIGHT;
 
 const COLORS = {
-  primary: "#4F359B",
+  primary: "#113C9C",
   accent: "#EF4444",
   white: "#FFFFFF",
   black: "#1A1A1A",
@@ -2495,6 +2499,7 @@ const MapScreen: React.FC = () => {
   const [selectedMemberLocationId, setSelectedMemberLocationId] = useState<string | null>(null);
   const [memberRemovalLoadingId, setMemberRemovalLoadingId] = useState<string | null>(null);
   const [accountActionsVisible, setAccountActionsVisible] = useState(false);
+  const [isNotificationsModalVisible, setIsNotificationsModalVisible] = useState(false); // New State
   const [isLeavingCircle, setIsLeavingCircle] = useState(false);
   const [isDeletingCircle, setIsDeletingCircle] = useState(false);
   const [assignedLocationsByCircle, setAssignedLocationsByCircle] = useState<Record<string, AssignedLocationRecord>>({});
@@ -2503,7 +2508,8 @@ const MapScreen: React.FC = () => {
   const lastAssignedFetchTimestampRef = useRef(0);
   const fetchCircleMembersInFlightRef = useRef(new Set<string>());
   const memberFetchTimestampsRef = useRef<Record<string, number>>({});
-  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+
+  // Removed isProfileModalVisible
   const [profileNameInput, setProfileNameInput] = useState("");
   const [profileMetadataInput, setProfileMetadataInput] = useState("");
   const [profileAvatarOriginal, setProfileAvatarOriginal] = useState<string | null>(null);
@@ -2534,8 +2540,79 @@ const MapScreen: React.FC = () => {
 
   // Circle Notification Settings
   const [isCircleNotificationSettingsModalVisible, setIsCircleNotificationSettingsModalVisible] = useState(false);
+
   const [currentNotificationSettings, setCurrentNotificationSettings] = useState<CircleNotificationSettings>({});
   const [isSavingCircleNotificationSettings, setIsSavingCircleNotificationSettings] = useState(false);
+  const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
+
+  // --- Derived State (Moved up) ---
+  const circleCreatorId = useMemo(() => {
+    const creatorIdRaw = selectedCircle?.creatorId;
+    if (creatorIdRaw === undefined || creatorIdRaw === null) {
+      return null;
+    }
+    return String(creatorIdRaw);
+  }, [selectedCircle]);
+
+  const isCircleCreator = useMemo(() => {
+    if (!currentUserId || !circleCreatorId) {
+      return false;
+    }
+    return currentUserId === circleCreatorId;
+  }, [circleCreatorId, currentUserId]);
+
+  const currentMembership = useMemo(() => {
+    if (!currentUserId) return null;
+    return (
+      selectedCircleMembers.find((member) => resolveMemberId(member) === currentUserId) ?? null
+    );
+  }, [currentUserId, selectedCircleMembers]);
+
+  const currentMembershipRole = useMemo(() => {
+    if (isCircleCreator) return "creator";
+    return normalizeRole(currentMembership?.Membership?.role) ?? null;
+  }, [currentMembership, isCircleCreator]);
+
+  const canManageLocations = useMemo(() => {
+    return isCircleCreator || currentMembershipRole === "admin";
+  }, [currentMembershipRole, isCircleCreator]);
+
+  const handleOpenAccountModal = useCallback(() => {
+    setIsSettingsModalVisible(false);
+
+    // Populate profile data
+    const defaultName = currentMembership?.name ?? "";
+    let defaultMetadata = "";
+    const membershipMetadata = currentMembership?.Membership?.metadata;
+    if (typeof membershipMetadata === "string") {
+      defaultMetadata = membershipMetadata;
+    } else if (membershipMetadata && typeof membershipMetadata === "object") {
+      try {
+        defaultMetadata = JSON.stringify(membershipMetadata, null, 2);
+      } catch {
+        defaultMetadata = "";
+      }
+    }
+
+    setProfileNameInput(defaultName);
+    setProfileMetadataInput(defaultMetadata);
+    const existingAvatar =
+      extractAvatarUrl(currentMembership) ??
+      (typeof currentUserAvatarUrl === "string" ? currentUserAvatarUrl : null) ??
+      profileAvatarOriginal ??
+      null;
+    setProfileAvatarOriginal(existingAvatar);
+    setProfileAvatarPreview(existingAvatar);
+    setProfileAvatarUpload(null);
+    setProfileModalError(null);
+
+    setIsAccountModalVisible(true);
+  }, [currentMembership, currentUserAvatarUrl, profileAvatarOriginal]);
+
+  const handleCloseAccountModal = useCallback(() => {
+    setIsAccountModalVisible(false);
+    setIsSettingsModalVisible(true); // Re-open settings when closing account (optional, based on "Back" flow)
+  }, []);
 
   const handleOpenCircleNotificationSettings = () => {
     if (!selectedCircle) return;
@@ -4012,36 +4089,7 @@ const MapScreen: React.FC = () => {
     setIsExpanded(true);
   }, [assignedLocationDetails, mapRef, setIsExpanded]);
 
-  const circleCreatorId = useMemo(() => {
-    const creatorIdRaw = selectedCircle?.creatorId;
-    if (creatorIdRaw === undefined || creatorIdRaw === null) {
-      return null;
-    }
-    return String(creatorIdRaw);
-  }, [selectedCircle]);
 
-  const isCircleCreator = useMemo(() => {
-    if (!currentUserId || !circleCreatorId) {
-      return false;
-    }
-    return currentUserId === circleCreatorId;
-  }, [circleCreatorId, currentUserId]);
-
-  const currentMembership = useMemo(() => {
-    if (!currentUserId) return null;
-    return (
-      selectedCircleMembers.find((member) => resolveMemberId(member) === currentUserId) ?? null
-    );
-  }, [currentUserId, selectedCircleMembers]);
-
-  const currentMembershipRole = useMemo(() => {
-    if (isCircleCreator) return "creator";
-    return normalizeRole(currentMembership?.Membership?.role) ?? null;
-  }, [currentMembership, isCircleCreator]);
-
-  const canManageLocations = useMemo(() => {
-    return isCircleCreator || currentMembershipRole === "admin";
-  }, [currentMembershipRole, isCircleCreator]);
 
   const {
     filteredDescending: locationHistoryFilteredDescending,
@@ -4912,34 +4960,7 @@ const MapScreen: React.FC = () => {
     );
   }, [executeSosAlert, isSendingSos, selectedCircle]);
 
-  const handleOpenProfileModal = useCallback(() => {
-    const defaultName = currentMembership?.name ?? "";
-    let defaultMetadata = "";
-    const membershipMetadata = currentMembership?.Membership?.metadata;
-    if (typeof membershipMetadata === "string") {
-      defaultMetadata = membershipMetadata;
-    } else if (membershipMetadata && typeof membershipMetadata === "object") {
-      try {
-        defaultMetadata = JSON.stringify(membershipMetadata, null, 2);
-      } catch {
-        defaultMetadata = "";
-      }
-    }
 
-    setProfileNameInput(defaultName);
-    setProfileMetadataInput(defaultMetadata);
-    const existingAvatar =
-      extractAvatarUrl(currentMembership) ??
-      (typeof currentUserAvatarUrl === "string" ? currentUserAvatarUrl : null) ??
-      profileAvatarOriginal ??
-      null;
-    setProfileAvatarOriginal(existingAvatar);
-    setProfileAvatarPreview(existingAvatar);
-    setProfileAvatarUpload(null);
-    setProfileModalError(null);
-    setIsProfileModalVisible(true);
-    setAccountActionsVisible(false);
-  }, [currentMembership, currentUserAvatarUrl, profileAvatarOriginal]);
 
   const fetchLocationHistory = useCallback(async () => {
     if (locationHistoryLoading) {
@@ -5064,12 +5085,7 @@ const MapScreen: React.FC = () => {
 
   const locationHistoryKeyExtractor = useCallback((item: LocationHistoryEntry) => item.id, []);
 
-  const closeProfileModal = useCallback(() => {
-    if (isSavingProfile) return;
-    setIsProfileModalVisible(false);
-    setProfileAvatarUpload(null);
-    setProfileAvatarPreview(profileAvatarOriginal);
-  }, [isSavingProfile, profileAvatarOriginal]);
+
 
   const handlePickProfileImage = useCallback(async () => {
     if (isSavingProfile || isPickingProfileImage) {
@@ -5192,7 +5208,7 @@ const MapScreen: React.FC = () => {
         throw new Error(message);
       }
 
-      setIsProfileModalVisible(false);
+
       setProfileAvatarUpload(null);
       Alert.alert("Profile updated", "Your profile details were saved.");
 
@@ -5818,7 +5834,7 @@ const MapScreen: React.FC = () => {
 
         {/* --- TOP HEADER --- */}
         <View style={[styles.headerContainer, { paddingTop: insets.top + 10 }]}>
-          <TouchableOpacity style={styles.roundButton} onPress={handleOpenCircleNotificationSettings}>
+          <TouchableOpacity style={styles.roundButton} onPress={() => setIsSettingsModalVisible(true)}>
             <Ionicons name="settings-sharp" size={24} color={COLORS.black} />
           </TouchableOpacity>
 
@@ -5830,8 +5846,8 @@ const MapScreen: React.FC = () => {
             <Ionicons name="chevron-down" size={20} color={COLORS.primary} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.roundButton} onPress={() => setAccountActionsVisible(true)}>
-            <Ionicons name="person-circle-outline" size={26} color={COLORS.black} />
+          <TouchableOpacity style={styles.roundButton} onPress={() => setIsNotificationsModalVisible(true)}>
+            <NotificationIcon width={22} height={22} color={COLORS.black} />
           </TouchableOpacity>
         </View>
 
@@ -5882,6 +5898,24 @@ const MapScreen: React.FC = () => {
           settings={currentNotificationSettings}
           onSave={handleSaveCircleNotificationSettings}
           insets={insets}
+        />
+
+        <SettingsModal
+          visible={isSettingsModalVisible}
+          onClose={() => setIsSettingsModalVisible(false)}
+          onSmartNotifications={() => {
+            setIsSettingsModalVisible(false);
+            handleOpenCircleNotificationSettings();
+          }}
+          onAddPeople={() => {
+            setIsSettingsModalVisible(false);
+            handleStartInviteFlow();
+          }}
+          onAccount={() => {
+            setIsSettingsModalVisible(false);
+            setAccountActionsVisible(true);
+          }}
+          onLogout={handleLogout}
         />
 
         {/* --- UNIFIED BOTTOM SHEET (Content and Nav) --- */}
@@ -6195,21 +6229,70 @@ const MapScreen: React.FC = () => {
           onPlaceSaved={requestCirclesRefresh}
         />
 
-        <AccountActionsModal
-          visible={accountActionsVisible}
-          onClose={() => setAccountActionsVisible(false)}
-          topPadding={insets.top + 64}
+
+
+        <SettingsModal
+          visible={isSettingsModalVisible}
+          onClose={handleCloseSettingsModal}
+          onAccount={handleOpenAccountModal}
+          onSmartNotifications={() => {
+            handleCloseSettingsModal();
+            handleOpenCircleNotificationSettings();
+          }}
+          onLocationSharing={() => {
+            // Already handled in SettingsModal or we can add specific handler
+          }}
+        // Pass other handlers as needed or leave optional
+        />
+
+        <AccountModal
+          visible={isAccountModalVisible}
+          onClose={handleCloseAccountModal}
           colors={COLORS}
-          onPressProfile={handleOpenProfileModal}
-          onPressLocationHistory={handleOpenLocationHistoryModal}
-          onPressLogout={handleLogout}
+
+          onPressLocationHistory={() => {
+            setIsAccountModalVisible(false);
+            handleOpenLocationHistoryModal();
+          }}
+          onPressLogout={() => {
+            setIsAccountModalVisible(false);
+            handleLogout();
+          }}
           isCircleCreator={isCircleCreator}
-          onPressDeleteCircle={handleDeleteCircle}
-          onPressLeaveCircle={handleLeaveCircle}
+          onPressDeleteCircle={() => {
+            setIsAccountModalVisible(false);
+            handleDeleteCircle();
+          }}
+          onPressLeaveCircle={() => {
+            setIsAccountModalVisible(false);
+            handleLeaveCircle();
+          }}
+
           isDeletingCircle={isDeletingCircle}
           isLeavingCircle={isLeavingCircle}
           canDeleteCircle={Boolean(selectedCircle)}
           canLeaveCircle={Boolean(selectedCircle)}
+
+          // Profile Props
+          email={currentMembership?.email ?? undefined}
+          phone={(currentMembership as any)?.phoneNumber ?? (currentMembership as any)?.phone ?? undefined}
+          profileNameInput={profileNameInput}
+          setProfileNameInput={setProfileNameInput}
+          profileMetadataInput={profileMetadataInput}
+          setProfileMetadataInput={setProfileMetadataInput}
+          profileAvatarPreview={profileAvatarPreview}
+          isSavingProfile={isSavingProfile}
+          isPickingProfileImage={isPickingProfileImage}
+          profileModalError={profileModalError}
+          onPickProfileImage={handlePickProfileImage}
+          onClearProfileImage={handleClearProfileImage}
+          onSaveProfile={handleSubmitProfileUpdate}
+        />
+
+        <NotificationsModal
+          visible={isNotificationsModalVisible}
+          onClose={() => setIsNotificationsModalVisible(false)}
+          colors={COLORS}
         />
 
         <Modal
@@ -6419,105 +6502,7 @@ const MapScreen: React.FC = () => {
           </View>
         </Modal>
 
-        <Modal
-          visible={isProfileModalVisible}
-          transparent
-          animationType="fade"
-          onRequestClose={closeProfileModal}
-        >
-          <View style={styles.memberModalOverlay}>
-            <TouchableOpacity
-              style={styles.memberModalBackdrop}
-              activeOpacity={1}
-              onPress={closeProfileModal}
-            />
-            <View style={[styles.memberModalCard, { paddingBottom: insets.bottom + 16 }]}>
-              <Text style={styles.memberModalTitle}>Update profile</Text>
-              <Text style={styles.memberModalSubtitle}>Your name and metadata apply across all circles.</Text>
 
-              <Text style={styles.memberModalLabel}>Display name</Text>
-              <TextInput
-                style={styles.memberModalInput}
-                value={profileNameInput}
-                onChangeText={setProfileNameInput}
-                placeholder="Enter your name"
-                placeholderTextColor={COLORS.gray}
-                editable={!isSavingProfile}
-              />
-
-              <Text style={[styles.memberModalLabel, { marginTop: 16 }]}>Profile picture</Text>
-              <View style={styles.profileAvatarRow}>
-                <View style={styles.profileAvatarPreviewWrapper}>
-                  {profileAvatarPreview ? (
-                    <Image source={{ uri: profileAvatarPreview }} style={styles.profileAvatarImage} />
-                  ) : (
-                    <View style={styles.profileAvatarPlaceholder}>
-                      <Ionicons name="person-circle-outline" size={48} color={COLORS.gray} />
-                    </View>
-                  )}
-                </View>
-                <View style={styles.profileAvatarActions}>
-                  <TouchableOpacity
-                    style={styles.profileAvatarPrimaryButton}
-                    onPress={handlePickProfileImage}
-                    disabled={isSavingProfile || isPickingProfileImage}
-                  >
-                    {isPickingProfileImage ? (
-                      <ActivityIndicator size="small" color={COLORS.white} />
-                    ) : (
-                      <Text style={styles.profileAvatarPrimaryText}>Choose image</Text>
-                    )}
-                  </TouchableOpacity>
-                  {profileAvatarUpload ? (
-                    <TouchableOpacity
-                      style={styles.profileAvatarSecondaryButton}
-                      onPress={handleClearProfileImage}
-                      disabled={isSavingProfile}
-                    >
-                      <Text style={styles.profileAvatarSecondaryText}>Remove selection</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-              </View>
-
-              <Text style={[styles.memberModalLabel, { marginTop: 16 }]}>Metadata (JSON or text)</Text>
-              <TextInput
-                style={[styles.memberModalInput, styles.memberModalTextarea]}
-                value={profileMetadataInput}
-                onChangeText={setProfileMetadataInput}
-                placeholder='{"bio": "Loves maps"}'
-                placeholderTextColor={COLORS.gray}
-                editable={!isSavingProfile}
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-
-              {profileModalError ? <Text style={styles.memberModalError}>{profileModalError}</Text> : null}
-
-              <View style={styles.memberModalButtonsRow}>
-                <TouchableOpacity
-                  style={styles.memberModalSecondaryButton}
-                  onPress={closeProfileModal}
-                  disabled={isSavingProfile}
-                >
-                  <Text style={styles.memberModalSecondaryText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.memberModalPrimaryButton, isSavingProfile && styles.memberModalPrimaryButtonDisabled]}
-                  onPress={handleSubmitProfileUpdate}
-                  disabled={isSavingProfile}
-                >
-                  {isSavingProfile ? (
-                    <ActivityIndicator size="small" color={COLORS.white} />
-                  ) : (
-                    <Text style={styles.memberModalPrimaryText}>Save</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
 
         <Modal
           visible={editMemberModalVisible}
@@ -7184,7 +7169,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 12,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    borderTopColor: '#4F46E5',
+    borderTopColor: '#113C9C',
     marginTop: -3,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },

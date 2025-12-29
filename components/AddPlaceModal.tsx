@@ -4,17 +4,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import MapView, { Circle, MapPressEvent, Marker, MarkerDragStartEndEvent, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -281,6 +281,42 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     }
   }, []);
 
+  const updateSelectedLocation = useCallback(
+    async (latitude: number, longitude: number, address?: string, skipReverse = false, preserveNickname = false) => {
+      setLocationError(null);
+      let resolvedAddress = address?.trim();
+
+      if (!resolvedAddress && !skipReverse) {
+        setIsResolvingAddress(true);
+        resolvedAddress = await buildAddressFromReverseGeocode(latitude, longitude);
+        setIsResolvingAddress(false);
+      }
+
+      const finalAddress = resolvedAddress && resolvedAddress.length > 0
+        ? resolvedAddress
+        : `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+
+      setSelectedLocation({ latitude, longitude, address: finalAddress });
+      if (!preserveNickname && !hasEditedNickname) {
+        setPlaceNickname(finalAddress);
+        setHasEditedNickname(false);
+      }
+
+      requestAnimationFrame(() => {
+        mapRef.current?.animateToRegion(
+          {
+            latitude,
+            longitude,
+            latitudeDelta: 0.008,
+            longitudeDelta: 0.008,
+          },
+          280
+        );
+      });
+    },
+    [hasEditedNickname]
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -388,41 +424,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     };
   }, []);
 
-  const updateSelectedLocation = useCallback(
-    async (latitude: number, longitude: number, address?: string, skipReverse = false, preserveNickname = false) => {
-      setLocationError(null);
-      let resolvedAddress = address?.trim();
 
-      if (!resolvedAddress && !skipReverse) {
-        setIsResolvingAddress(true);
-        resolvedAddress = await buildAddressFromReverseGeocode(latitude, longitude);
-        setIsResolvingAddress(false);
-      }
-
-      const finalAddress = resolvedAddress && resolvedAddress.length > 0
-        ? resolvedAddress
-        : `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-
-      setSelectedLocation({ latitude, longitude, address: finalAddress });
-      if (!preserveNickname && !hasEditedNickname) {
-        setPlaceNickname(finalAddress);
-        setHasEditedNickname(false);
-      }
-
-      requestAnimationFrame(() => {
-        mapRef.current?.animateToRegion(
-          {
-            latitude,
-            longitude,
-            latitudeDelta: 0.008,
-            longitudeDelta: 0.008,
-          },
-          280
-        );
-      });
-    },
-    [hasEditedNickname]
-  );
 
   const performSearch = useCallback(
     async (query: string) => {
