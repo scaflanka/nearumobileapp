@@ -6,6 +6,7 @@ import Slider from "@react-native-community/slider";
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -51,7 +52,7 @@ interface AddPlaceModalProps {
 }
 
 const COLORS = {
-  primary: "#4F359B",
+  primary: "#113C9C",
   accent: "#EF4444",
   white: "#FFFFFF",
   black: "#1A1A1A",
@@ -919,8 +920,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   primaryButtonDisabled: {
-    backgroundColor: COLORS.gray,
-    opacity: 0.4,
+    backgroundColor: COLORS.primary,
+    // opacity: 0.6,
   },
   primaryButtonText: {
     color: COLORS.white,
@@ -1033,11 +1034,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   mapWrapper: {
-    borderRadius: 18,
+    width: Dimensions.get("window").width,
+    marginLeft: -20,
+    height: Dimensions.get("window").height * 0.5,
+    borderTopLeftRadius: 15,
+    borderTopRightRadius: 15,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "#E2E8F0",
-    height: 320,
     backgroundColor: "#F8FAFC",
   },
   map: {

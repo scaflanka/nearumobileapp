@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ResizeMode, Video } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useRef, useState } from 'react';
 import {
     Dimensions,
@@ -80,17 +80,21 @@ export default function WalkthroughScreen() {
         );
     };
 
+    const player = useVideoPlayer(VIDEO_SOURCE, player => {
+        player.loop = true;
+        player.muted = true;
+        player.play();
+    });
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-            <Video
-                source={VIDEO_SOURCE}
+            <VideoView
+                player={player}
                 style={styles.backgroundVideo}
-                resizeMode={ResizeMode.COVER}
-                shouldPlay
-                isLooping
-                isMuted
+                contentFit="cover"
+                nativeControls={false}
             />
 
             <LinearGradient
