@@ -28,7 +28,7 @@ import {
 } from "react-native";
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 
-import { FontAwesome5, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -2510,6 +2510,8 @@ const MapScreen: React.FC = () => {
   const memberFetchTimestampsRef = useRef<Record<string, number>>({});
 
   // Removed isProfileModalVisible
+  const [activeSection, setActiveSection] = useState<'members' | 'place' | 'key'>('members');
+  const [selectedDrivingMemberId, setSelectedDrivingMemberId] = useState<string | "all">("all");
   const [profileNameInput, setProfileNameInput] = useState("");
   const [profileMetadataInput, setProfileMetadataInput] = useState("");
   const [profileAvatarOriginal, setProfileAvatarOriginal] = useState<string | null>(null);
@@ -5925,284 +5927,650 @@ const MapScreen: React.FC = () => {
           </View>
 
           <View style={{ flex: 1, width: '100%' }}>
-            <ScrollView
-              ref={sheetScrollRef}
-              contentContainerStyle={styles.sheetContent}
-              showsVerticalScrollIndicator={false}
-              scrollEnabled={isExpanded}
-              keyboardShouldPersistTaps="handled"
-            >
-              <View style={styles.quickActionsRow}>
-                <TouchableOpacity style={styles.quickActionButton} onPress={() => scrollToSection('members')}>
-                  <View style={styles.quickActionIconCircle}><Ionicons name="people" size={20} color={COLORS.primary} /></View>
-                  <Text style={styles.quickActionLabel}>Members</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.quickActionButton} onPress={() => scrollToSection('pet')}>
-                  <View style={styles.quickActionIconCircle}><FontAwesome5 name="paw" size={18} color={COLORS.primary} /></View>
-                  <Text style={styles.quickActionLabel}>Pet</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.quickActionButton} onPress={() => scrollToSection('key')}>
-                  <View style={styles.quickActionIconCircle}><Ionicons name="key" size={20} color={COLORS.primary} /></View>
-                  <Text style={styles.quickActionLabel}>Key</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.quickActionButton} onPress={() => scrollToSection('place')}>
-                  <View style={styles.quickActionIconCircle}><MaterialCommunityIcons name="home-map-marker" size={20} color={COLORS.primary} /></View>
-                  <Text style={styles.quickActionLabel}>Place</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Members Section */}
-              <View style={styles.sectionTitleContainer} onLayout={e => { sectionPositions['members'] = e.nativeEvent.layout.y; }}>
-                <Text style={styles.sectionTitle}>People in {selectedCircle?.name || "Circle"}</Text>
-              </View>
-
-              <TouchableOpacity style={styles.listItem} onPress={handleStartInviteFlow}>
-                <View style={[styles.listIconCircle, { borderStyle: 'dashed', borderColor: COLORS.primary }]}>
-                  <Ionicons name="add" size={24} color={COLORS.primary} />
+            {activeTab === "Location" ? (
+              <ScrollView
+                ref={sheetScrollRef}
+                contentContainerStyle={styles.sheetContent}
+                showsVerticalScrollIndicator={false}
+                scrollEnabled={isExpanded}
+                keyboardShouldPersistTaps="handled"
+              >
+                <View style={{ flexDirection: 'row', justifyContent: 'center', marginVertical: 16, gap: 12 }}>
+                  <TouchableOpacity
+                    style={{
+                      width: 101, height: 38, borderRadius: 23.5,
+                      backgroundColor: activeSection === 'members' ? COLORS.primary : '#DBEAFE',
+                      alignItems: 'center', justifyContent: 'center'
+                    }}
+                    onPress={() => {
+                      scrollToSection('members');
+                      setActiveSection('members');
+                    }}
+                  >
+                    <Ionicons name="people" size={20} color={activeSection === 'members' ? COLORS.white : COLORS.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{
+                      width: 101, height: 38, borderRadius: 23.5,
+                      backgroundColor: activeSection === 'place' ? COLORS.primary : '#DBEAFE',
+                      alignItems: 'center', justifyContent: 'center'
+                    }}
+                    onPress={() => {
+                      scrollToSection('place');
+                      setActiveSection('place');
+                    }}
+                  >
+                    <MaterialCommunityIcons name="office-building" size={20} color={activeSection === 'place' ? COLORS.white : COLORS.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{
+                      width: 101, height: 38, borderRadius: 23.5,
+                      backgroundColor: activeSection === 'key' ? COLORS.primary : '#DBEAFE',
+                      alignItems: 'center', justifyContent: 'center'
+                    }}
+                    onPress={() => {
+                      scrollToSection('key');
+                      setActiveSection('key');
+                    }}
+                  >
+                    <Ionicons name="bluetooth" size={20} color={activeSection === 'key' ? COLORS.white : COLORS.primary} />
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.listItemText}>Add a new member</Text>
-              </TouchableOpacity>
 
-              {selectedCircleMembers.map((member) => {
-                const memberId = resolveMemberId(member);
-                const displayName = member.Membership?.nickname || member.name || member.email || "Unknown Member";
-                const memberRole = normalizeRole(member.Membership?.role) ?? "member";
-                const roleLabel = formatRoleLabel(memberRole);
-                const nicknameLabel = member.Membership?.nickname;
-                const fallbackSeed = member.email || member.name || (memberId ?? displayName);
-                let normalizedMemberAvatar = null;
-                if (typeof member.avatar === "string" && member.avatar.trim().length > 0) {
-                  const trimmed = member.avatar.trim();
-                  if (trimmed.startsWith("/")) {
-                    normalizedMemberAvatar = `${API_BASE_URL}${trimmed}`.replace("/api/uploads", "/uploads");
-                  } else {
-                    normalizedMemberAvatar = trimmed;
-                  }
-                }
+                {/* Members Section */}
+                <View style={{ height: 1 }} onLayout={e => { sectionPositions['members'] = e.nativeEvent.layout.y; }} />
 
-                // Debug log
-                //  console.log(`[MemberRendering] ${displayName}: raw=${member.avatar}, final=${avatarUri}, base=${API_BASE_URL}`);
-
-                const selfAvatarFallback =
-                  memberId && currentUserId && memberId === currentUserId && currentUserAvatarUrl
-                    ? currentUserAvatarUrl
-                    : null;
-                const avatarUri =
-                  normalizedMemberAvatar ??
-                  selfAvatarFallback ??
-                  `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
-
-
-
-                const memberKey = memberId ?? member.email ?? `${displayName}-${memberRole}`;
-                const allowEdit = canEditMemberRole(member) || canEditMemberNickname(member);
-                const allowRemove = canRemoveMember(member);
-                const isRemoving = memberRemovalLoadingId === memberId;
-
-                return (
-                  <View key={memberKey} style={[styles.listItem, styles.memberRow]}>
-                    <View style={styles.memberAvatarCircle}>
-                      <Image source={{ uri: avatarUri }} style={styles.memberAvatarImage} resizeMode="cover" />
-                    </View>
-                    <View style={styles.memberDetails}>
-                      <Text style={styles.listItemText}>{displayName}</Text>
-                      <Text style={styles.listItemSubText}>{roleLabel}</Text>
-                      {nicknameLabel && (
-                        <Text style={styles.memberNicknameText}>Nickname: {nicknameLabel}</Text>
-                      )}
-                    </View>
-                    {(allowEdit || allowRemove) && (
-                      <View style={styles.memberActionsColumn}>
-                        {allowEdit && (
-                          <TouchableOpacity
-                            style={[styles.memberActionButton, allowRemove && styles.memberActionButtonSpacing]}
-                            onPress={() => openEditMemberModal(member)}
-                          >
-                            <Ionicons name="create-outline" size={20} color={COLORS.primary} />
-                          </TouchableOpacity>
-                        )}
-                        {allowRemove && (
-                          <TouchableOpacity
-                            style={styles.memberActionButton}
-                            onPress={() => confirmRemoveMember(member)}
-                            disabled={isRemoving}
-                          >
-                            {isRemoving ? (
-                              <ActivityIndicator size="small" color={COLORS.accent} />
-                            ) : (
-                              <Ionicons name="trash-outline" size={20} color={COLORS.accent} />
-                            )}
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    )}
+                {/* <TouchableOpacity style={styles.listItem} onPress={handleStartInviteFlow}>
+                  <View style={[styles.listIconCircle, { borderStyle: 'dashed', borderColor: COLORS.primary }]}>
+                    <Ionicons name="add" size={24} color={COLORS.primary} />
                   </View>
-                );
-              })}
+                  <Text style={styles.listItemText}>Add a new member</Text>
+                </TouchableOpacity> */}
 
-              <View style={styles.divider} />
-
-              {/* Pet Section */}
-              <View style={styles.sectionTitleContainer} onLayout={e => { sectionPositions['pet'] = e.nativeEvent.layout.y; }}>
-                <Text style={styles.sectionTitle}>Pet</Text>
-              </View>
-              <TouchableOpacity style={styles.listItem} onPress={handleNavigateToAddPlace}>
-                <View style={[styles.listIconCircle, { backgroundColor: '#FDE68A' }]}>
-                  <FontAwesome5 name="paw" size={18} color={COLORS.primary} />
-                </View>
-                <View>
-                  <Text style={styles.listItemText}>Add a pet</Text>
-                  <Text style={styles.listItemSubText}>Track your pet&apos;s location.</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Key Section */}
-              <View style={styles.sectionTitleContainer} onLayout={e => { sectionPositions['key'] = e.nativeEvent.layout.y; }}>
-                <Text style={styles.sectionTitle}>Key</Text>
-              </View>
-              <TouchableOpacity style={styles.listItem}>
-                <View style={[styles.listIconCircle, { backgroundColor: '#F3E8FF' }]}>
-                  <Ionicons name="key" size={20} color={COLORS.primary} />
-                </View>
-                <View>
-                  <Text style={styles.listItemText}>Add a key</Text>
-                  <Text style={styles.listItemSubText}>Attach a tracker to keys.</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Place Section */}
-              <View style={styles.sectionTitleContainer} onLayout={e => { sectionPositions['place'] = e.nativeEvent.layout.y; }}>
-                <Text style={styles.sectionTitle}>Place</Text>
-              </View>
-              <TouchableOpacity style={styles.listItem} onPress={handleNavigateToAddPlace}>
-                <View style={[styles.listIconCircle, { backgroundColor: '#DCFCE7' }]}>
-                  <MaterialCommunityIcons name="home-map-marker" size={20} color={COLORS.primary} />
-                </View>
-                <View>
-                  <Text style={styles.listItemText}>Add a place</Text>
-                  <Text style={styles.listItemSubText}>Save home, office, etc.</Text>
-                </View>
-              </TouchableOpacity>
-
-              {currentAssignedEntry ? (
-                <TouchableOpacity
-                  style={[
-                    styles.assignedSummaryCard,
-                    !assignedLocationDetails?.coordinates && styles.assignedSummaryCardDisabled,
-                  ]}
-                  onPress={handleFocusAssignedLocation}
-                  activeOpacity={assignedLocationDetails?.coordinates ? 0.85 : 1}
-                  disabled={!assignedLocationDetails?.coordinates}
-                >
-                  <View style={styles.assignedSummaryIcon}>
-                    <Ionicons name="star" size={18} color={COLORS.white} />
-                  </View>
-                  <View style={styles.assignedSummaryTextWrapper}>
-                    <Text style={styles.assignedSummaryTitle}>{assignedLocationDetails?.label ?? "Assigned location"}</Text>
-                    <Text style={styles.assignedSummarySubtitle}>
-                      {assignedLocationDetails?.subtitle ?? "We will notify you once additional details are available."}
-                    </Text>
-                    {assignedLocationDetails?.coordinates ? (
-                      <Text style={styles.assignedSummaryHint}>Tap to focus on this place</Text>
-                    ) : null}
-                  </View>
-                  {loadingAssignedLocations ? (
-                    <ActivityIndicator size="small" color={COLORS.primary} />
-                  ) : null}
-                </TouchableOpacity>
-              ) : null}
-
-              {savedPlaces.length > 0 ? (
-                <View style={styles.savedPlacesWrapper}>
-                  <Text style={styles.savedPlacesTitle}>Saved places</Text>
-                  {savedPlaces.map((loc: LocationPoint, index: number) => {
-                    let metadataAddress: string | undefined;
-                    if (loc.metadata && typeof loc.metadata === "object") {
-                      const addressValue = (loc.metadata as any).address;
-                      const formattedValue = (loc.metadata as any).formattedAddress;
-                      if (typeof addressValue === "string" && addressValue.trim().length > 0) {
-                        metadataAddress = addressValue.trim();
-                      } else if (typeof formattedValue === "string" && formattedValue.trim().length > 0) {
-                        metadataAddress = formattedValue.trim();
-                      }
+                {selectedCircleMembers.map((member) => {
+                  const memberId = resolveMemberId(member);
+                  const displayName = member.Membership?.nickname || member.name || member.email || "Unknown Member";
+                  const memberRole = normalizeRole(member.Membership?.role) ?? "member";
+                  const roleLabel = formatRoleLabel(memberRole);
+                  const nicknameLabel = member.Membership?.nickname;
+                  const fallbackSeed = member.email || member.name || (memberId ?? displayName);
+                  let normalizedMemberAvatar = null;
+                  if (typeof member.avatar === "string" && member.avatar.trim().length > 0) {
+                    const trimmed = member.avatar.trim();
+                    if (trimmed.startsWith("/")) {
+                      normalizedMemberAvatar = `${API_BASE_URL}${trimmed}`.replace("/api/uploads", "/uploads");
+                    } else {
+                      normalizedMemberAvatar = trimmed;
                     }
+                  }
 
-                    const label = loc.name && loc.name.trim().length > 0 ? loc.name.trim() : metadataAddress ?? `Place ${index + 1}`;
-                    const coordinateLabel = `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`;
-                    const subtitle = metadataAddress && metadataAddress !== label ? metadataAddress : coordinateLabel;
-                    const hasEditableId = loc.id !== undefined && loc.id !== null && String(loc.id).trim().length > 0;
-                    const canEditThisLocation = canManageLocations && hasEditableId;
-                    const normalizedLocationId = normalizeIdentifier(loc.id);
-                    const isAssignedToCurrentUser =
-                      currentUserAssignedLocationId !== null &&
-                      normalizedLocationId !== null &&
-                      normalizedLocationId === currentUserAssignedLocationId;
+                  // Debug log
+                  //  console.log(`[MemberRendering] ${displayName}: raw=${member.avatar}, final=${avatarUri}, base=${API_BASE_URL}`);
 
-                    return (
-                      <View key={loc.id ? `saved-${loc.id}` : `saved-${index}`} style={styles.savedPlaceRow}>
-                        <View style={styles.savedPlaceIconCircle}>
-                          <MaterialCommunityIcons name="map-marker" size={18} color={COLORS.primary} />
+                  const selfAvatarFallback =
+                    memberId && currentUserId && memberId === currentUserId && currentUserAvatarUrl
+                      ? currentUserAvatarUrl
+                      : null;
+                  const avatarUri =
+                    normalizedMemberAvatar ??
+                    selfAvatarFallback ??
+                    `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
+
+
+
+                  const memberKey = memberId ?? member.email ?? `${displayName}-${memberRole}`;
+                  const allowEdit = canEditMemberRole(member) || canEditMemberNickname(member);
+                  const allowRemove = canRemoveMember(member);
+                  const isRemoving = memberRemovalLoadingId === memberId;
+
+                  return (
+                    <View key={memberKey} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12 }}>
+                      <View style={{ marginRight: 16 }}>
+                        <View style={{
+                          width: 56, height: 56, borderRadius: 28,
+                          backgroundColor: '#1E40AF', justifyContent: 'center', alignItems: 'center',
+                          overflow: 'hidden'
+                        }}>
+                          <Image source={{ uri: avatarUri }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                         </View>
-                        <View style={styles.savedPlaceTextWrapper}>
-                          <Text style={styles.savedPlaceName}>{label}</Text>
-                          <Text style={styles.savedPlaceCoords}>{subtitle}</Text>
-                          {isAssignedToCurrentUser ? (
-                            <View style={styles.assignedBadge}>
-                              <Ionicons name="star" size={12} color={COLORS.primary} />
-                              <Text style={styles.assignedBadgeText}>Assigned to you</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                        {canEditThisLocation ? (
-                          <TouchableOpacity
-                            style={styles.savedPlaceActionButton}
-                            onPress={() => handleEditSavedPlace(loc)}
-                          >
-                            <Ionicons name="create-outline" size={20} color={COLORS.primary} />
-                          </TouchableOpacity>
-                        ) : null}
+                        {/* Battery Badge */}
+                        {/* We can add battery here if we had it easily accessible in scope (it is in rendering logic above which I replaced, wait, I need to fetch it) */}
+                      </View>
 
-                        {canEditThisLocation ? (
-                          <TouchableOpacity
-                            style={styles.savedPlaceActionButton}
-                            onPress={() => handleDeleteSavedPlace(loc)}
-                          >
-                            <Ionicons name="trash-outline" size={20} color={COLORS.accent} />
-                          </TouchableOpacity>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A' }}>{displayName}</Text>
+                        <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 2 }}>
+                          {roleLabel} {/* In real app we would put location text here */}
+                        </Text>
+                      </View>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        {(allowEdit || allowRemove) && (
+                          <>
+                            {allowEdit && (
+                              <TouchableOpacity
+                                style={{ padding: 8 }}
+                                onPress={() => openEditMemberModal(member)}
+                              >
+                                <Ionicons name="create-outline" size={20} color="#3B82F6" />
+                              </TouchableOpacity>
+                            )}
+                            {allowRemove && (
+                              <TouchableOpacity
+                                style={{ padding: 8 }}
+                                onPress={() => confirmRemoveMember(member)}
+                              >
+                                {isRemoving ? (
+                                  <ActivityIndicator size="small" color={COLORS.accent} />
+                                ) : (
+                                  <Ionicons name="trash-outline" size={20} color={COLORS.accent} />
+                                )}
+                              </TouchableOpacity>
+                            )}
+                          </>
+                        )}
+                        {/* Heart Icon from design - purely cosmetic or for "Safe" status? User said keep functions. I'll stick to edit/delete but maybe add a heart for visuals if no edit rights? No, let's keep it clean. */}
+                      </View>
+                    </View>
+                  );
+                })}
+                <View style={{ height: 1, backgroundColor: '#E5E7EB', marginVertical: 20 }} />
+
+
+                <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, marginTop: 4 }} onPress={handleStartInviteFlow}>
+                  <View style={{
+                    width: 56, height: 56, borderRadius: 28,
+                    backgroundColor: COLORS.primary,
+                    alignItems: 'center', justifyContent: 'center',
+                    marginRight: 16
+                  }}>
+                    <Ionicons name="person-outline" size={28} color={COLORS.white} />
+                  </View>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A' }}>Add a person</Text>
+                </TouchableOpacity>
+
+
+
+
+
+                {/* Places Header & Link */}
+                <View onLayout={e => { sectionPositions['place'] = e.nativeEvent.layout.y; }}>
+                  <Text style={{ fontSize: 18, fontWeight: '700', color: '#1E3A8A', marginBottom: 12 }}>Places</Text>
+                  <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }} onPress={handleNavigateToAddPlace}>
+                    <View style={{
+                      width: 48, height: 48, borderRadius: 24,
+                      backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center',
+                      marginRight: 14 // Reduced margin
+                    }}>
+                      <MaterialCommunityIcons name="office-building" size={24} color={COLORS.primary} />
+                    </View>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#1E3A8A' }}>Manage Places</Text>
+                  </TouchableOpacity>
+
+
+
+
+
+
+                  {currentAssignedEntry ? (
+                    <TouchableOpacity
+                      style={[
+                        styles.assignedSummaryCard,
+                        !assignedLocationDetails?.coordinates && styles.assignedSummaryCardDisabled,
+                      ]}
+                      onPress={handleFocusAssignedLocation}
+                      activeOpacity={assignedLocationDetails?.coordinates ? 0.85 : 1}
+                      disabled={!assignedLocationDetails?.coordinates}
+                    >
+                      <View style={styles.assignedSummaryIcon}>
+                        <Ionicons name="star" size={18} color={COLORS.white} />
+                      </View>
+                      <View style={styles.assignedSummaryTextWrapper}>
+                        <Text style={styles.assignedSummaryTitle}>{assignedLocationDetails?.label ?? "Assigned location"}</Text>
+                        <Text style={styles.assignedSummarySubtitle}>
+                          {assignedLocationDetails?.subtitle ?? "We will notify you once additional details are available."}
+                        </Text>
+                        {assignedLocationDetails?.coordinates ? (
+                          <Text style={styles.assignedSummaryHint}>Tap to focus on this place</Text>
                         ) : null}
                       </View>
-                    );
-                  })}
-                </View>
-              ) : (
-                <Text style={styles.savedPlacesEmpty}>No saved places yet.</Text>
-              )}
+                      {loadingAssignedLocations ? (
+                        <ActivityIndicator size="small" color={COLORS.primary} />
+                      ) : null}
+                    </TouchableOpacity>
+                  ) : null}
 
-              <View style={{ height: 20 }} />
-            </ScrollView>
+                  {savedPlaces.length > 0 ? (
+                    <View style={styles.savedPlacesWrapper}>
+                      <Text style={styles.savedPlacesTitle}>Saved places</Text>
+                      {savedPlaces.map((loc: LocationPoint, index: number) => {
+                        let metadataAddress: string | undefined;
+                        if (loc.metadata && typeof loc.metadata === "object") {
+                          const addressValue = (loc.metadata as any).address;
+                          const formattedValue = (loc.metadata as any).formattedAddress;
+                          if (typeof addressValue === "string" && addressValue.trim().length > 0) {
+                            metadataAddress = addressValue.trim();
+                          } else if (typeof formattedValue === "string" && formattedValue.trim().length > 0) {
+                            metadataAddress = formattedValue.trim();
+                          }
+                        }
+
+                        const label = loc.name && loc.name.trim().length > 0 ? loc.name.trim() : metadataAddress ?? `Place ${index + 1}`;
+                        const coordinateLabel = `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`;
+                        const subtitle = metadataAddress && metadataAddress !== label ? metadataAddress : coordinateLabel;
+                        const hasEditableId = loc.id !== undefined && loc.id !== null && String(loc.id).trim().length > 0;
+                        const canEditThisLocation = canManageLocations && hasEditableId;
+                        const normalizedLocationId = normalizeIdentifier(loc.id);
+                        const isAssignedToCurrentUser =
+                          currentUserAssignedLocationId !== null &&
+                          normalizedLocationId !== null &&
+                          normalizedLocationId === currentUserAssignedLocationId;
+
+                        return (
+                          <View key={loc.id ? `saved-${loc.id}` : `saved-${index}`} style={styles.savedPlaceRow}>
+                            <View style={styles.savedPlaceIconCircle}>
+                              <MaterialCommunityIcons name="map-marker" size={18} color={COLORS.primary} />
+                            </View>
+                            <View style={styles.savedPlaceTextWrapper}>
+                              <Text style={styles.savedPlaceName}>{label}</Text>
+                              <Text style={styles.savedPlaceCoords}>{subtitle}</Text>
+                              {isAssignedToCurrentUser ? (
+                                <View style={styles.assignedBadge}>
+                                  <Ionicons name="star" size={12} color={COLORS.primary} />
+                                  <Text style={styles.assignedBadgeText}>Assigned to you</Text>
+                                </View>
+                              ) : null}
+                            </View>
+                            {canEditThisLocation ? (
+                              <TouchableOpacity
+                                style={styles.savedPlaceActionButton}
+                                onPress={() => handleEditSavedPlace(loc)}
+                              >
+                                <Ionicons name="create-outline" size={20} color={COLORS.primary} />
+                              </TouchableOpacity>
+                            ) : null}
+
+                            {canEditThisLocation ? (
+                              <TouchableOpacity
+                                style={styles.savedPlaceActionButton}
+                                onPress={() => handleDeleteSavedPlace(loc)}
+                              >
+                                <Ionicons name="trash-outline" size={20} color={COLORS.accent} />
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ) : (
+                    <Text style={styles.savedPlacesEmpty}>No saved places yet.</Text>
+                  )}
+
+
+
+                </View>
+
+                <View style={{ height: 20 }} />
+
+                {/* Items Section */}
+                <View onLayout={e => { sectionPositions['key'] = e.nativeEvent.layout.y; }}>
+                  <Text style={{ fontSize: 18, fontWeight: '700', color: '#1E3A8A', marginBottom: 12 }}>Items</Text>
+                  <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <View style={{
+                      width: 48, height: 48, borderRadius: 24,
+                      backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center',
+                      marginRight: 14
+                    }}>
+                      <Ionicons name="bluetooth" size={24} color={COLORS.primary} />
+                    </View>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#6B7280' }}>Add and Item</Text>
+                  </TouchableOpacity>
+
+
+                </View>
+
+
+
+                <View style={{ height: 20 }} />
+              </ScrollView>
+            ) : null}
+
+            {activeTab === "Driving" ? (
+              <View style={{ flex: 1, backgroundColor: COLORS.white }}>
+                {/* Member Selector Row */}
+                <View style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F3F4F6' }}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
+
+                    {/* "All" Option */}
+                    <TouchableOpacity
+                      style={{ marginRight: 20, alignItems: 'center' }}
+                      onPress={() => setSelectedDrivingMemberId("all")}
+                    >
+                      <View style={{
+                        width: 58, height: 58, borderRadius: 29,
+                        backgroundColor: COLORS.primary,
+                        alignItems: 'center', justifyContent: 'center',
+                        marginBottom: 6
+                      }}>
+                        <Text style={{ fontSize: 18, color: COLORS.white, fontWeight: '700' }}>
+                          {selectedCircle?.name ? selectedCircle.name.substring(0, 2).toUpperCase() : "ALL"}
+                        </Text>
+                      </View>
+                      <Text style={{
+                        fontSize: 12,
+                        color: selectedDrivingMemberId === "all" ? COLORS.primary : COLORS.gray,
+                        fontWeight: selectedDrivingMemberId === "all" ? '700' : '400'
+                      }}>
+                        All
+                      </Text>
+                      {selectedDrivingMemberId === "all" && (
+                        <View style={{
+                          height: 3, width: 20, backgroundColor: COLORS.primary,
+                          borderRadius: 2, marginTop: 4
+                        }} />
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Members */}
+                    {selectedCircleMembers.map((member) => {
+                      const memberId = resolveMemberId(member);
+                      const displayName = member.Membership?.nickname || member.name || member.email?.split('@')[0] || "Member";
+                      const fallbackSeed = member.email || member.name || displayName;
+                      let avatarUrl = member.avatar;
+                      if (typeof avatarUrl === "string" && avatarUrl.startsWith("/")) {
+                        avatarUrl = `${API_BASE_URL}${avatarUrl}`.replace("/api/uploads", "/uploads");
+                      }
+                      const resolvedAvatar = avatarUrl || `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
+                      const isSelected = selectedDrivingMemberId === memberId;
+
+                      return (
+                        <TouchableOpacity
+                          key={memberId}
+                          style={{ marginRight: 20, alignItems: 'center' }}
+                          onPress={() => setSelectedDrivingMemberId(memberId || "")}
+                        >
+                          <View style={{
+                            width: 58, height: 58, borderRadius: 29,
+                            borderWidth: 1,
+                            borderColor: '#E5E7EB',
+                            overflow: 'hidden',
+                            marginBottom: 6
+                          }}>
+                            <Image source={{ uri: resolvedAvatar }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                          </View>
+                          <Text style={{
+                            fontSize: 12,
+                            color: isSelected ? COLORS.primary : COLORS.gray,
+                            fontWeight: isSelected ? '700' : '400'
+                          }}>
+                            {displayName}
+                          </Text>
+                          {isSelected && (
+                            <View style={{
+                              height: 3, width: 20, backgroundColor: COLORS.primary,
+                              borderRadius: 2, marginTop: 4
+                            }} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {/* Period Selector */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 16 }}>
+                  <TouchableOpacity style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center' }}>
+                    <Ionicons name="chevron-back" size={20} color={COLORS.primary} />
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.primary }}>This Week</Text>
+                  <View style={{ width: 32 }} />
+                </View>
+
+                {/* Empty State Card */}
+                <View style={{ paddingHorizontal: 20, marginTop: 20 }}>
+                  <View style={{
+                    backgroundColor: '#EBEFFF',
+                    borderRadius: 20,
+                    paddingVertical: 40,
+                    paddingHorizontal: 24,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: 250
+                  }}>
+                    <View style={{
+                      width: 60, height: 60, borderRadius: 30,
+                      backgroundColor: '#3B82F6',
+                      alignItems: 'center', justifyContent: 'center',
+                      marginBottom: 16,
+                      shadowColor: "#3B82F6",
+                      shadowOffset: { width: 0, height: 4 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 8,
+                      elevation: 6
+                    }}>
+                      <MaterialCommunityIcons name="steering" size={32} color={COLORS.white} />
+                    </View>
+                    <Text style={{ fontSize: 18, fontWeight: '700', color: '#1E3A8A', marginBottom: 12, textAlign: 'center' }}>
+                      No Drives Detected
+                    </Text>
+                    <Text style={{ fontSize: 14, color: '#60A5FA', textAlign: 'center', lineHeight: 22 }}>
+                      Your Circle may have turned off Drive Detection or had a low battery/poor connectivity.
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+
+            {activeTab === "Safety" ? (
+              <ScrollView style={{ flex: 1, backgroundColor: COLORS.white }} contentContainerStyle={{ padding: 20 }}>
+                {/* Safety Network Banner */}
+                <View style={{
+                  backgroundColor: '#1E3A8A', // Deep blue
+                  borderRadius: 16,
+                  padding: 20,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  marginBottom: 24
+                }}>
+                  <View style={{
+                    width: 80, height: 80, borderRadius: 40,
+                    backgroundColor: COLORS.white,
+                    alignItems: 'center', justifyContent: 'center',
+                    marginRight: 16
+                  }}>
+                    {/* Illustration placeholder */}
+                    <View style={{ flexDirection: 'row', marginBottom: -10 }}>
+                      <Ionicons name="person-outline" size={24} color="#1E3A8A" style={{ marginRight: -8 }} />
+                      <Ionicons name="person-outline" size={24} color="#1E3A8A" style={{ marginLeft: -8 }} />
+                    </View>
+                    <Ionicons name="person-outline" size={24} color="#1E3A8A" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: COLORS.white, fontSize: 16, fontWeight: '700', marginBottom: 6 }}>
+                      Expand your safety network
+                    </Text>
+                    <Text style={{ color: '#BFDBFE', fontSize: 13, lineHeight: 18 }}>
+                      We recommend to invite 3 to 4 members to your emergency contacts in your circle.
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Emergency Contacts Header */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={{ fontSize: 15, color: '#3B82F6', fontWeight: '500' }}>Your Circle emergency contacts</Text>
+                  <TouchableOpacity>
+                    <Text style={{ fontSize: 15, color: '#1E3A8A', fontWeight: '700' }}>+ Add Contact</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Contact List Item (Mock) */}
+                <View style={{
+                  flexDirection: 'row', alignItems: 'center',
+                  backgroundColor: '#EFF6FF', // Light blue bg
+                  padding: 12, borderRadius: 12, marginBottom: 32
+                }}>
+                  <Image
+                    source={{ uri: "https://i.pravatar.cc/150?u=campbell" }}
+                    style={{ width: 48, height: 48, borderRadius: 24, marginRight: 12, backgroundColor: '#DBEAFE' }}
+                  />
+                  <View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A', marginRight: 6 }}>D Campbell</Text>
+                      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E' }} />
+                    </View>
+                    <Text style={{ fontSize: 13, color: '#3B82F6' }}>Pending Approval</Text>
+                  </View>
+                </View>
+
+                {/* Coming Soon Section */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+                  <Text style={{ fontSize: 14, color: COLORS.gray, fontWeight: '500' }}>Will be available soon</Text>
+                  <View style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB', marginLeft: 12 }} />
+                </View>
+
+                {/* Crash Detection Card */}
+                <View style={{
+                  backgroundColor: '#F3F4F6',
+                  borderRadius: 16,
+                  padding: 20,
+                  flexDirection: 'row',
+                  alignItems: 'center'
+                }}>
+                  <View style={{
+                    width: 64, height: 64, borderRadius: 32,
+                    backgroundColor: '#E5E7EB',
+                    alignItems: 'center', justifyContent: 'center',
+                    marginRight: 16
+                  }}>
+                    <MaterialCommunityIcons name="car-emergency" size={32} color="#1E3A8A" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A', marginBottom: 4 }}>
+                      Crash Detection
+                    </Text>
+                    <Text style={{ fontSize: 13, color: '#4B5563', lineHeight: 18 }}>
+                      Crash Alerts help keep you safe by sending a notification to everyone in your circle.
+                    </Text>
+                  </View>
+                </View>
+
+              </ScrollView>
+            ) : null}
+
+            {activeTab === "Membership" ? (
+              <ScrollView style={{ flex: 1, backgroundColor: COLORS.white }} contentContainerStyle={{ padding: 20 }}>
+                <View style={{ alignItems: 'center', marginBottom: 30, marginTop: 10 }}>
+                  <View style={{
+                    width: 70, height: 70, borderRadius: 35,
+                    backgroundColor: '#EFF6FF', alignItems: 'center', justifyContent: 'center',
+                    marginBottom: 16
+                  }}>
+                    <MaterialCommunityIcons name="crown-outline" size={40} color={COLORS.primary} />
+                  </View>
+                  <Text style={{ fontSize: 24, fontWeight: '700', color: COLORS.black, textAlign: 'center', marginBottom: 8 }}>
+                    Go Premium
+                  </Text>
+                  <Text style={{ fontSize: 16, color: COLORS.gray, textAlign: 'center', maxWidth: '80%' }}>
+                    Unlock full access to advanced safety features for your circle.
+                  </Text>
+                </View>
+
+                {/* Features List */}
+                <View style={{ marginBottom: 30 }}>
+                  {[
+                    { icon: "history", title: "30 Days Location History", desc: "See where your family has been." },
+                    { icon: "map-marker-multiple-outline", title: "Unlimited Places", desc: "Get alerted when they arrive or leave." },
+                    { icon: "car-speed-limiter", title: "Drive Reports", desc: "See top speed and driving habits." },
+                    { icon: "alert-octagon-outline", title: "SOS Alerts", desc: "Immediate emergency notifications." },
+                  ].map((feature, idx) => (
+                    <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+                      <View style={{
+                        width: 48, height: 48, borderRadius: 12,
+                        backgroundColor: '#F3F4F6', alignItems: 'center', justifyContent: 'center',
+                        marginRight: 16
+                      }}>
+                        <MaterialCommunityIcons name={feature.icon as any} size={24} color={COLORS.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 16, fontWeight: '600', color: COLORS.black }}>{feature.title}</Text>
+                        <Text style={{ fontSize: 13, color: COLORS.gray }}>{feature.desc}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+
+                {/* Pricing / CTA */}
+                <View style={{
+                  backgroundColor: '#1E3A8A',
+                  borderRadius: 20,
+                  padding: 24,
+                  alignItems: 'center'
+                }}>
+                  <Text style={{ color: COLORS.white, fontSize: 18, fontWeight: '700', marginBottom: 8 }}>
+                    Start 7-Day Free Trial
+                  </Text>
+                  <Text style={{ color: '#93C5FD', fontSize: 14, marginBottom: 20 }}>
+                    Then $9.99/month. Cancel anytime.
+                  </Text>
+                  <TouchableOpacity style={{
+                    backgroundColor: COLORS.white,
+                    paddingVertical: 14,
+                    width: '100%',
+                    borderRadius: 12,
+                    alignItems: 'center'
+                  }}>
+                    <Text style={{ color: '#1E3A8A', fontSize: 16, fontWeight: '700' }}>Subscribe Now</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ height: 20 }} />
+              </ScrollView>
+            ) : null}
           </View>
 
           {/* Navigation Bar */}
           <View style={styles.navBar}>
             <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab("Location")}>
               <View style={styles.iconContainer}>
-                <MaterialCommunityIcons name="map-marker-radius" size={28} color={activeTab === "Location" ? COLORS.primary : COLORS.gray} />
+                <Ionicons
+                  name="location-outline"
+                  size={28}
+                  color={activeTab === "Location" ? COLORS.primary : COLORS.gray}
+                />
               </View>
-              <Text style={[styles.navText, activeTab === "Location" && styles.activeNavText]}>Location</Text>
+              <Text style={[styles.navText, activeTab === "Location" && styles.activeNavText]}>Map</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab("Driving")}>
               <View style={styles.iconContainer}>
-                <MaterialCommunityIcons name="steering" size={28} color={activeTab === "Driving" ? COLORS.primary : COLORS.gray} />
+                <MaterialCommunityIcons
+                  name="car-side"
+                  size={28}
+                  color={activeTab === "Driving" ? COLORS.primary : COLORS.gray}
+                />
               </View>
               <Text style={[styles.navText, activeTab === "Driving" && styles.activeNavText]}>Driving</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab("Safety")}>
               <View style={styles.iconContainer}>
-                <MaterialCommunityIcons name="shield-check-outline" size={28} color={activeTab === "Safety" ? COLORS.primary : COLORS.gray} />
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={28}
+                  color={activeTab === "Safety" ? COLORS.primary : COLORS.gray}
+                />
               </View>
               <Text style={[styles.navText, activeTab === "Safety" && styles.activeNavText]}>Safety</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.navItem} onPress={() => setActiveTab("Membership")}>
+              <View style={styles.iconContainer}>
+                <MaterialCommunityIcons
+                  name="card-account-details-outline"
+                  size={28}
+                  color={activeTab === "Membership" ? COLORS.primary : COLORS.gray}
+                />
+              </View>
+              <Text style={[styles.navText, activeTab === "Membership" && styles.activeNavText]}>Membership</Text>
             </TouchableOpacity>
           </View>
         </Animated.View>

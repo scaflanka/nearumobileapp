@@ -415,7 +415,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
         searchTimeoutRef.current = null;
       }
     };
-  }, [editingLocation, isEditMode, requestLocationPermission, resetFormState, updateSelectedLocation, visible]);
+  }, [editingLocation, isEditMode, visible]);
 
   useEffect(() => {
     return () => {
