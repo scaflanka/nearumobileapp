@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '@/utils/auth';
+import GoogleAuthService from '@/utils/googleAuth';
 import { flushPendingFcmToken, persistFcmToken, registerDeviceAndGetFCMToken } from '@/utils/permissions';
 import { AntDesign } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -7,6 +8,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 
 const LogInScreen = () => {
     const params = useLocalSearchParams<{ email?: string | string[]; message?: string | string[] }>();
@@ -42,6 +44,11 @@ const LogInScreen = () => {
         }
     }, [initialMessage]);
 
+    useEffect(() => {
+        GoogleAuthService.configure();
+    }, []);
+
+    // ... existing storeTokensAndNavigate ...
     const storeTokensAndNavigate = useCallback(
         async (token: string, refreshToken?: string) => {
             await AsyncStorage.setItem('authToken', token);
@@ -64,6 +71,7 @@ const LogInScreen = () => {
         [router],
     );
 
+    // ... existing handleLogin ...
     const handleLogin = useCallback(async () => {
         if (!email.trim()) {
             setErrorMessage('Please enter your email.');
@@ -121,6 +129,41 @@ const LogInScreen = () => {
 
         router.push({ pathname: '/screens/VerifyEmailScreen', params: { email } });
     }, [email, router]);
+
+    const handleGoogleLogin = async () => {
+        setLoading(true);
+        setErrorMessage(null);
+        try {
+            const user = await GoogleAuthService.signIn();
+
+            if (user) {
+                // If the service returns a user, navigation and storage are already handled/prepared.
+                // However, our service as written does store tokens but doesn't Navigate.
+                // We should navigate here.
+
+                // Note: The service stores tokens in AsyncStorage, but we might also need to
+                // trigger any other side effects like FCM registration if they were in storeTokensAndNavigate.
+                // ideally storeTokensAndNavigate logic should be reused or put after service call.
+
+                // Since GoogleAuthService.signIn returns the user object on success:
+                try {
+                    await flushPendingFcmToken();
+                    const fcmToken = await registerDeviceAndGetFCMToken();
+                    if (fcmToken) {
+                        await persistFcmToken(fcmToken);
+                    }
+                } catch (error) {
+                    console.error('Error registering FCM token after login:', error);
+                }
+                router.replace('/screens/MapScreen');
+            }
+        } catch (error: any) {
+            console.error('Google login error', error);
+            setErrorMessage(error.message || 'An error occurred during Google sign in');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <ScrollView
@@ -204,7 +247,7 @@ const LogInScreen = () => {
                     <View style={styles.divider} />
                 </View>
 
-                <TouchableOpacity style={styles.socialButton} onPress={() => { /* Handle Google Login */ }}>
+                <TouchableOpacity style={styles.socialButton} onPress={handleGoogleLogin}>
                     <Image
                         source={require('../../assets/images/google-logo.png')}
                         style={styles.socialIcon}

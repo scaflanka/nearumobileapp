@@ -2,7 +2,7 @@
 import { manipulateAsync, SaveFormat } from "expo-image-manipulator";
 import * as Location from "expo-location";
 import { router, useFocusEffect } from "expo-router";
-import * as TaskManager from "expo-task-manager";
+// import * as TaskManager from "expo-task-manager"; // Removed
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,6 +27,7 @@ import {
   View
 } from "react-native";
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import { isBackgroundLocationRunning, startBackgroundLocation, stopBackgroundLocation } from "../../services/BackgroundLocationService";
 
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 
@@ -36,7 +37,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 // --- Components & Utils ---
 import * as ImagePicker from "expo-image-picker";
 import AddPlaceModal from "../../components/AddPlaceModal";
-import { API_BASE_URL, authenticatedFetch, logout } from "../../utils/auth";
+import { API_BASE_URL, authenticatedFetch, logout, updateUserProfile } from "../../utils/auth";
 import {
   readBatteryLevel,
   sendBatteryLevelValue,
@@ -48,6 +49,8 @@ import { setNotificationReceptionEnabled } from "../../utils/notificationListene
 import { requestNotificationPermissions } from "../../utils/permissions";
 import NotificationIcon from "../components/icons/NotificationIcon";
 import AccountModal from "../components/modals/AccountModal";
+import CircleManagementModal from "../components/modals/CircleManagementModal";
+import LocationSharingModal from "../components/modals/LocationSharingModal";
 import { NotificationsModal } from "../components/modals/NotificationsModal";
 import SettingsModal from "../components/modals/SettingsModal";
 
@@ -105,287 +108,11 @@ function splitIntoJourneys(history: LocationHistoryEntry[]): LocationHistoryEntr
   return journeys;
 }
 
-// Modal component for member journeys
-const MemberJourneysModal: React.FC<{
-  visible: boolean;
-  onClose: () => void;
-  members: CircleMember[];
-  insets: { top: number; bottom: number; left: number; right: number };
-}> = ({ visible, onClose, members, insets }) => {
-  const DEFAULT_AVATAR = "https://api.dicebear.com/7.x/initials/svg?seed=";
 
-  return (
-    <RNModal
-      visible={visible}
-      animationType="slide"
-      onRequestClose={onClose}
-      transparent={false}
-    >
-      <View style={{ flex: 1, backgroundColor: '#F8FAFC', paddingTop: insets.top }}>
-        {/* Header */}
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: 20,
-          paddingVertical: 16,
-          backgroundColor: '#FFFFFF',
-          borderBottomWidth: 1,
-          borderBottomColor: '#E5E7EB',
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05,
-          shadowRadius: 3,
-          elevation: 2,
-        }}>
-          <View>
-            <Text style={{ fontSize: 24, fontWeight: '700', color: '#1A1A1A' }}>Today's Journeys</Text>
-            <Text style={{ fontSize: 14, color: '#6B7280', marginTop: 2 }}>{members.length} {members.length === 1 ? 'member' : 'members'}</Text>
-          </View>
-          <TouchableOpacity
-            onPress={onClose}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 22,
-              backgroundColor: '#F3F4F6',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="close" size={22} color="#1A1A1A" />
-          </TouchableOpacity>
-        </View>
+import { MemberJourneysModal } from "../components/modals/MemberJourneysModal";
+import { MAP_THEME_LIGHT } from "../constants/MapThemes";
 
-        {/* Content */}
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 16 }}
-          showsVerticalScrollIndicator={false}
-        >
-          {members.map((member) => {
-            const rawHistory = member.todayLocationHistory || [];
-            // Take only the last 10 entries (or first 10 if that's what "last" means in this context, assuming chronological order might vary, but typically lists are often newest first or we just want a limit. User said "last 10". If the array is chronological [old...new], last 10 is .slice(-10). If it's [new...old], it's .slice(0, 10). Let's assume typical history list behavior. API usually returns ordered list. Let's try slicing first 10 if it's descending, or verify.)
-            // Assuming the list is already sorted or we just want to cap it. The user said "last 10", often implying "most recent". If `todayLocationHistory` is large, we want to limit the markers/lines.
-            // Let's assume standard "latest first" or just "limit to 10". If it's chronological, `slice(-10)` gives the end.
-            // However, usually detailed history is huge.
-            // Let's try slicing safe.
-            const limitedHistory = rawHistory.slice(0, 20);
-            const journeys = splitIntoJourneys(limitedHistory);
 
-            console.log(journeys);
-            const battery = member.batteryLevel?.level ?? null;
-            const batteryPercent = battery !== null ? Math.round(battery) : null;
-            const displayName = member.Membership?.nickname || member.name || member.email || 'Member';
-            const avatarUrl = member.avatar || `${DEFAULT_AVATAR}${encodeURIComponent(displayName)}`;
-
-            return (
-              <View
-                key={String(member.id)}
-                style={{
-                  marginBottom: 20,
-                  backgroundColor: '#FFFFFF',
-                  borderRadius: 16,
-                  padding: 16,
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 1 },
-                  shadowOpacity: 0.08,
-                  shadowRadius: 4,
-                  elevation: 2,
-                }}
-              >
-                {/* Member Header */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                  <Image
-                    source={{ uri: avatarUrl }}
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 24,
-                      backgroundColor: '#E5E7EB',
-                      marginRight: 12,
-                    }}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 18, fontWeight: '600', color: '#1A1A1A' }}>{displayName}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-                      <Ionicons
-                        name="battery-half"
-                        size={14}
-                        color={batteryPercent !== null && batteryPercent < 20 ? '#EF4444' : '#22C55E'}
-                      />
-                      <Text style={{
-                        fontSize: 13,
-                        color: batteryPercent !== null && batteryPercent < 20 ? '#EF4444' : '#6B7280',
-                        marginLeft: 4,
-                        fontWeight: '500',
-                      }}>
-                        {batteryPercent !== null ? `${batteryPercent}%` : 'N/A'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Speed/Status Display */}
-                  {(() => {
-                    const metadata = member.currentLocation?.metadata;
-                    // Handle both parsed object and stringified metadata
-                    const speedVal = metadata?.speed;
-
-                    if (typeof speedVal === 'number') {
-                      // Speed is in m/s, convert to km/h
-                      // 1 m/s = 3.6 km/h
-                      const speedKmh = speedVal * 3.6;
-                      const isStopped = speedKmh <= 1; // Tolerance for "Stopped"
-                      const isWalking = speedKmh > 1 && speedKmh <= 5;
-                      const isDriving = speedKmh > 5;
-
-                      let statusText = "";
-                      let showSpeed = false;
-
-                      if (isStopped) {
-                        statusText = "Stopped";
-                      } else if (isDriving) {
-                        statusText = "Driving";
-                        showSpeed = true;
-                      } else if (isWalking) {
-                        statusText = "Walking";
-                        showSpeed = true;
-                      } else {
-                        statusText = "Moving";
-                        showSpeed = true;
-                      }
-
-                      return (
-                        <View style={{ alignItems: 'flex-end', justifyContent: 'center', marginRight: 12 }}>
-                          <Text style={{ fontSize: 13, fontWeight: '600', color: isStopped ? '#6B7280' : '#2563EB' }}>
-                            {statusText}
-                          </Text>
-                          {showSpeed && (
-                            <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 1 }}>
-                              {Math.round(speedKmh)} km/h
-                            </Text>
-                          )}
-                        </View>
-                      );
-                    }
-                    return null;
-                  })()}
-                  <View style={{
-                    backgroundColor: '#F3F0FF',
-                    paddingHorizontal: 10,
-                    paddingVertical: 4,
-                    borderRadius: 12,
-                  }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: '#4F359B' }}>
-                      {journeys.length} {journeys.length === 1 ? 'journey' : 'journeys'}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Journeys */}
-                {
-                  journeys.length === 0 ? (
-                    <View style={{
-                      padding: 20,
-                      alignItems: 'center',
-                      backgroundColor: '#F9FAFB',
-                      borderRadius: 12,
-                    }}>
-                      <Ionicons name="location-outline" size={32} color="#9CA3AF" />
-                      <Text style={{ fontSize: 14, color: '#9CA3AF', marginTop: 8 }}>No journeys recorded today</Text>
-                    </View>
-                  ) : (
-                    journeys.map((journey, idx) => {
-                      const startTime = journey[0]?.createdAt ? new Date(journey[0].createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
-                      const endTime = journey[journey.length - 1]?.createdAt ? new Date(journey[journey.length - 1].createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
-
-                      return (
-                        <View
-                          key={idx}
-                          style={{
-                            marginBottom: idx < journeys.length - 1 ? 12 : 0,
-                            backgroundColor: '#F9FAFB',
-                            borderRadius: 12,
-                            padding: 12,
-                            borderWidth: 1,
-                            borderColor: '#E5E7EB',
-                          }}
-                        >
-                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <Text style={{ fontSize: 15, fontWeight: '600', color: '#1A1A1A' }}>Journey {idx + 1}</Text>
-                            {startTime && endTime && (
-                              <Text style={{ fontSize: 12, color: '#6B7280' }}>{startTime} - {endTime}</Text>
-                            )}
-                          </View>
-
-                          {journey.length >= 2 ? (
-                            <MapView
-                              style={{ width: '100%', height: 140, borderRadius: 8 }}
-                              initialRegion={{
-                                latitude: (journey[0].latitude + journey[journey.length - 1].latitude) / 2,
-                                longitude: (journey[0].longitude + journey[journey.length - 1].longitude) / 2,
-                                latitudeDelta: Math.abs(journey[0].latitude - journey[journey.length - 1].latitude) + 0.01,
-                                longitudeDelta: Math.abs(journey[0].longitude - journey[journey.length - 1].longitude) + 0.01,
-                              }}
-                              pointerEvents="none"
-                              provider={PROVIDER_GOOGLE}
-                            >
-                              <Polyline
-                                coordinates={journey.map(j => ({ latitude: j.latitude, longitude: j.longitude }))}
-                                strokeColor="#4F359B"
-                                strokeWidth={4}
-                              />
-                              <Marker
-                                coordinate={{ latitude: journey[0].latitude, longitude: journey[0].longitude }}
-                                anchor={{ x: 0.5, y: 0.5 }}
-                              >
-                                <View style={{
-                                  width: 12,
-                                  height: 12,
-                                  borderRadius: 6,
-                                  backgroundColor: '#22C55E',
-                                  borderWidth: 2,
-                                  borderColor: '#FFFFFF',
-                                }} />
-                              </Marker>
-                              <Marker
-                                coordinate={{ latitude: journey[journey.length - 1].latitude, longitude: journey[journey.length - 1].longitude }}
-                                anchor={{ x: 0.5, y: 0.5 }}
-                              >
-                                <View style={{
-                                  width: 12,
-                                  height: 12,
-                                  borderRadius: 6,
-                                  backgroundColor: '#EF4444',
-                                  borderWidth: 2,
-                                  borderColor: '#FFFFFF',
-                                }} />
-                              </Marker>
-                            </MapView>
-                          ) : (
-                            <View style={{
-                              padding: 16,
-                              alignItems: 'center',
-                              backgroundColor: '#FFFFFF',
-                              borderRadius: 8,
-                            }}>
-                              <Text style={{ fontSize: 13, color: '#9CA3AF' }}>Not enough location points</Text>
-                            </View>
-                          )}
-                        </View>
-                      );
-                    })
-                  )
-                }
-              </View>
-            );
-          })}
-        </ScrollView>
-      </View >
-    </RNModal >
-  );
-};
 
 // --- Constants ---
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -414,7 +141,7 @@ const STORAGE_KEYS = {
   notificationsEnabled: "mapScreen:settings:notificationsEnabled",
 };
 
-const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task";
+// const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task"; // Removed
 const LAST_POSTED_LOCATION_STORAGE_KEY = "mapScreen:lastPostedPerCircle";
 const isNativePlatform = Platform.OS === "ios" || Platform.OS === "android";
 const CIRCLE_LOCATIONS_CACHE_KEY = "mapScreen:circleLocationsCache";
@@ -436,166 +163,7 @@ const LOCATION_HISTORY_LIMIT = 100; // Limit for history items per fetch
 // In a real app, use Constants.expoConfig or similar, but for immediate stability we use the key found in app.json.
 const GOOGLE_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
 
-const MAP_THEME_LIGHT = [
-  {
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#f5f5f5"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.icon",
-    "stylers": [
-      {
-        "visibility": "on"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#616161"
-      }
-    ]
-  },
-  {
-    "elementType": "labels.text.stroke",
-    "stylers": [
-      {
-        "color": "#f5f5f5"
-      }
-    ]
-  },
-  {
-    "featureType": "administrative.land_parcel",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#bdbdbd"
-      }
-    ]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#eeeeee"
-      }
-    ]
-  },
-  {
-    "featureType": "poi",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#757575"
-      }
-    ]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#edf7ed"
-      }
-    ]
-  },
-  {
-    "featureType": "poi.park",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#6b9a76"
-      }
-    ]
-  },
-  {
-    "featureType": "road",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#ffffff"
-      }
-    ]
-  },
-  {
-    "featureType": "road.arterial",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#757575"
-      }
-    ]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#dadada"
-      }
-    ]
-  },
-  {
-    "featureType": "road.highway",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#616161"
-      }
-    ]
-  },
-  {
-    "featureType": "road.local",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#9e9e9e"
-      }
-    ]
-  },
-  {
-    "featureType": "transit.line",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#e5e5e5"
-      }
-    ]
-  },
-  {
-    "featureType": "transit.station",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#eeeeee"
-      }
-    ]
-  },
-  {
-    "featureType": "water",
-    "elementType": "geometry",
-    "stylers": [
-      {
-        "color": "#BBE2F9"
-      }
-    ]
-  },
-  {
-    "featureType": "water",
-    "elementType": "labels.text.fill",
-    "stylers": [
-      {
-        "color": "#9e9e9e"
-      }
-    ]
-  }
-];
+
 
 const parseBooleanPreference = (value: string | null | undefined, fallback: boolean): boolean => {
   if (value === null || value === undefined) {
@@ -840,6 +408,13 @@ const maybePostCircleLocationUpdate = async (
     }
   }
 
+  // Check location sharing preference
+  const sharingEnabled = await AsyncStorage.getItem(STORAGE_KEYS.locationSharingEnabled);
+  if (sharingEnabled !== null && sharingEnabled !== "true") {
+    console.log("Location sharing is disabled, skipping update.");
+    return false;
+  }
+
   // Fetch real location name
   const realLocationName = await getLocationNameFromGoogle(latitude, longitude);
 
@@ -870,51 +445,8 @@ const maybePostCircleLocationUpdate = async (
   return true;
 };
 
-let backgroundTaskRegistered = false;
-
-const registerBackgroundLocationTask = () => {
-  if (!isNativePlatform || backgroundTaskRegistered) {
-    return;
-  }
-
-  try {
-    if (!TaskManager.isTaskDefined(BACKGROUND_LOCATION_TASK_NAME)) {
-      TaskManager.defineTask(BACKGROUND_LOCATION_TASK_NAME, async ({ data, error }) => {
-        if (error) {
-          console.warn("Background location task error", error);
-          return;
-        }
-
-        const firstLocation = (data as { locations?: Location.LocationObject[] })?.locations?.[0];
-        if (!firstLocation?.coords) {
-          return;
-        }
-
-        const circleIdRaw = await AsyncStorage.getItem(STORAGE_KEYS.lastSelectedCircleId).catch(() => null);
-        const circleId = normalizeIdentifier(circleIdRaw);
-        if (!circleId) {
-          return;
-        }
-
-        try {
-          await processCircleLocationUpdate(circleId, {
-            latitude: firstLocation.coords.latitude,
-            longitude: firstLocation.coords.longitude,
-            accuracy: firstLocation.coords.accuracy ?? null,
-            speed: firstLocation.coords.speed ?? null,
-          });
-        } catch (updateError) {
-          console.warn("Background location update failed", updateError);
-        }
-      });
-    }
-
-    backgroundTaskRegistered = true;
-
-  } catch (registrationError) {
-    console.warn("Failed to register background location task", registrationError);
-  }
-};
+// Background task registration moved to services/BackgroundLocationService.ts
+// const registerBackgroundLocationTask = ... removed
 
 
 
@@ -1120,7 +652,7 @@ const markCircleLocationReached = async (
   locationId: string,
   coords: LocationUpdatePayload
 ): Promise<void> => {
-  const response = await authenticatedFetch(`${API_BASE_URL} /circles/${circleId}/mark-location-reached`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/circles/${circleId}/mark-location-reached`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1549,7 +1081,7 @@ const extractBatteryLevelInfo = (candidate: unknown): BatteryLevelInfo | null =>
   if (typeof candidate === "number" && Number.isFinite(candidate)) {
     const clamped = Math.max(0, Math.min(100, candidate));
     return {
-      level: clamped,
+      batteryLevel: clamped,
       deviceId: null,
       updatedAt: null,
     };
@@ -1564,7 +1096,7 @@ const extractBatteryLevelInfo = (candidate: unknown): BatteryLevelInfo | null =>
     if (Number.isFinite(parsed)) {
       const clamped = Math.max(0, Math.min(100, parsed));
       return {
-        level: clamped,
+        batteryLevel: clamped,
         deviceId: null,
         updatedAt: null,
       };
@@ -1621,7 +1153,7 @@ const extractBatteryLevelInfo = (candidate: unknown): BatteryLevelInfo | null =>
         asNonEmptyString(record.last_updated) ??
         null;
       return {
-        level: clamped,
+        batteryLevel: clamped,
         deviceId,
         updatedAt,
       };
@@ -1648,7 +1180,7 @@ const extractBatteryLevelInfo = (candidate: unknown): BatteryLevelInfo | null =>
             asNonEmptyString(record.last_updated) ??
             null;
           return {
-            level: clamped,
+            batteryLevel: clamped,
             deviceId,
             updatedAt,
           };
@@ -1690,11 +1222,41 @@ const extractCircleMembers = (circle: any): CircleMember[] => {
 
   const candidateLists = [
     circle?.Users,
+    circle?.users,
+    circle?.members,
+    circle?.param?.users,
+    circle?.data?.users,
+    circle?.data?.members,
   ];
 
-  const rawMembers = candidateLists.find((value) => Array.isArray(value)) ?? [];
+  console.log("CandidateList.......", candidateLists);
 
-  if (!Array.isArray(rawMembers)) return [];
+  let rawMembers = candidateLists.find((value) => Array.isArray(value)) ?? [];
+
+  if (!Array.isArray(rawMembers)) rawMembers = [];
+
+  // --- FIX: Explicitly check for creator and add if missing ---
+  const creator = circle?.creator ?? circle?.Creator;
+  if (creator && typeof creator === "object") {
+    const creatorId = creator.id ?? creator.userId ?? creator.UserId;
+    if (creatorId) {
+      const exists = rawMembers.some((m: any) => (m.id ?? m.userId) === creatorId);
+      if (!exists) {
+        // Normalize creator to look like a member
+        const normalizedCreator = {
+          ...creator,
+          // Creator typically has 'admin' or 'creator' role implicitly,
+          // but we can mock a Membership object if missing
+          Membership: creator.Membership ?? {
+            role: "creator",
+            nickname: creator.name ?? creator.email,
+          },
+        };
+        rawMembers = [normalizedCreator, ...rawMembers];
+      }
+    }
+  }
+  // ------------------------------------------------------------
 
   return rawMembers
     .filter(Boolean)
@@ -1703,10 +1265,11 @@ const extractCircleMembers = (circle: any): CircleMember[] => {
       name: member?.name ?? member?.Name,
       email: member?.email ?? member?.Email,
 
-      // Avatar Fix: Check direct string first
+      // Avatar Fix: Check profileLink first, then direct string
       avatar:
         (() => {
-          const raw = member?.avatar ??
+          const raw = member?.profileLink ??
+            member?.avatar ??
             extractAvatarUrl(member) ??
             extractAvatarUrl(member?.Membership) ??
             null;
@@ -1722,20 +1285,40 @@ const extractCircleMembers = (circle: any): CircleMember[] => {
         })(),
 
       // Battery Fix: Check nested object property first
-      batteryLevel:
-        extractBatteryLevelInfo(member?.batteryLevel?.batteryLevel) ??
-        extractBatteryLevelInfo(member?.batteryLevel) ??
-        extractBatteryLevelInfo(member?.latestBatteryLevel) ??
-        extractBatteryLevelInfo(member?.Membership?.batteryLevel) ??
-        null,
+      batteryLevel: (() => {
+        // Debug Log
+        if (member?.batteryLevel) {
+          console.log(`[BatteryDebug] ${member.name}:`, JSON.stringify(member.batteryLevel));
+        }
 
-      currentLocation: member?.currentLocation ?? member?.current_location ?? null,
+        let result = extractBatteryLevelInfo(member?.batteryLevel);
+
+        if (!result) {
+          result = extractBatteryLevelInfo(member?.latestBatteryLevel) ??
+            extractBatteryLevelInfo(member?.Membership?.batteryLevel) ??
+            null;
+        }
+
+        console.log(`[ExtractedResult] ${member.name}:`, JSON.stringify(result));
+        return result;
+      })(),
+
+      currentLocation:
+        member?.liveLocation ??
+        member?.currentLocation ??
+        member?.current_location ??
+        member?.latestLocation ??
+        member?.latest_location ??
+        member?.lastLocation ??
+        member?.last_location ??
+        member?.lastKnownLocation ??
+        member?.location ??
+        null,
 
       Membership: member?.Membership ?? member?.membership ?? undefined,
 
-      // --- ADDED LOCATION HISTORY HERE ---
-      // Mapping the array directly from the log you provided
       locationHistory: member?.todayLocationHistory ?? member?.locationHistory ?? [],
+      journeys: member?.journeys ?? [],
     }));
 };
 const parseAssignedLocationsList = (payload: any): any[] => {
@@ -2537,8 +2120,7 @@ const MapScreen: React.FC = () => {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // State for new journeys modal
-  const [isMemberJourneysModalVisible, setIsMemberJourneysModalVisible] = useState(false);
-  const [memberJourneysData, setMemberJourneysData] = useState<CircleMember[]>([]);
+  const [selectedJourneyMember, setSelectedJourneyMember] = useState<CircleMember | null>(null);
 
   // Circle Notification Settings
   const [isCircleNotificationSettingsModalVisible, setIsCircleNotificationSettingsModalVisible] = useState(false);
@@ -2546,6 +2128,27 @@ const MapScreen: React.FC = () => {
   const [currentNotificationSettings, setCurrentNotificationSettings] = useState<CircleNotificationSettings>({});
   const [isSavingCircleNotificationSettings, setIsSavingCircleNotificationSettings] = useState(false);
   const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
+
+  // Stored User Data (from Auth)
+  const [storedUser, setStoredUser] = useState<any>(null);
+
+  useEffect(() => {
+    const loadStoredUser = async () => {
+      try {
+        const userJson = await AsyncStorage.getItem("user");
+        if (userJson) {
+          setStoredUser(JSON.parse(userJson));
+        }
+      } catch (e) {
+        console.log("Failed to load stored user", e);
+      }
+    };
+    loadStoredUser();
+  }, []);
+
+  // --- Journeys Modal State ---
+  const [isMemberJourneysModalVisible, setIsMemberJourneysModalVisible] = useState(false);
+  const [memberJourneysData, setMemberJourneysData] = useState<CircleMember | null>(null);
 
   // --- Derived State (Moved up) ---
   const circleCreatorId = useMemo(() => {
@@ -2580,7 +2183,7 @@ const MapScreen: React.FC = () => {
   }, [currentMembershipRole, isCircleCreator]);
 
   const handleOpenAccountModal = useCallback(() => {
-    setIsSettingsModalVisible(false);
+    // setIsSettingsModalVisible(false); // Kept open by request
 
     // Populate profile data
     const defaultName = currentMembership?.name ?? "";
@@ -2671,6 +2274,9 @@ const MapScreen: React.FC = () => {
   };
 
 
+
+
+
   const batteryLevelRef = useRef<number | null>(null);
   const lastBatterySyncRef = useRef<number>(0);
   const lowBatteryAlertSentRef = useRef(false);
@@ -2711,6 +2317,38 @@ const MapScreen: React.FC = () => {
   const handleCloseSettingsModal = useCallback(() => {
     setIsSettingsModalVisible(false);
   }, []);
+
+  // --- Location Sharing Modal ---
+  const [isLocationSharingModalVisible, setIsLocationSharingModalVisible] = useState(false);
+
+  const handleOpenLocationSharingModal = useCallback(() => {
+    setIsLocationSharingModalVisible(true);
+  }, []);
+
+  const handleCloseLocationSharingModal = useCallback(() => {
+    setIsLocationSharingModalVisible(false);
+  }, []);
+
+  // --- Circle Management Modal ---
+  const [isCircleManagementModalVisible, setIsCircleManagementModalVisible] = useState(false);
+
+  const handleOpenCircleManagementModal = useCallback(() => {
+    setIsCircleManagementModalVisible(true);
+  }, []);
+
+  const handleCloseCircleManagementModal = useCallback(() => {
+    setIsCircleManagementModalVisible(false);
+  }, []);
+
+  const handleOpenAddPeopleModal = useCallback(() => {
+    if (!selectedCircle) {
+      Alert.alert("Error", "No circle selected.");
+      return;
+    }
+    setShareTargetCircle(selectedCircle);
+    setShareRequestId(Date.now());
+    setIsCirclesModalOpen(true);
+  }, [selectedCircle]);
 
   const handleToggleLocationSharing = useCallback(async (nextValue: boolean) => {
     if (isUpdatingLocationSharing || nextValue === locationSharingEnabled) {
@@ -2876,9 +2514,9 @@ const MapScreen: React.FC = () => {
 
         if (!initialLocationSharing && isNativePlatform) {
           try {
-            const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+            const hasStarted = await isBackgroundLocationRunning();
             if (hasStarted) {
-              await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+              await stopBackgroundLocation();
             }
           } catch (stopError) {
             console.warn("Failed to stop location updates during settings hydration", stopError);
@@ -3077,6 +2715,7 @@ const MapScreen: React.FC = () => {
       });
 
       const payload = await response.json().catch(() => ({}));
+      console.log("DEBUG: GET /api/circles/{id} payload:", JSON.stringify(payload, null, 2));
       if (!response.ok) {
         console.warn("Failed to load circle members", payload?.message);
         return;
@@ -3305,12 +2944,8 @@ const MapScreen: React.FC = () => {
       }
 
       if (userPayload?.batteryLevel) {
-        const batteryData = userPayload.batteryLevel as Record<string, unknown>;
-        setCurrentUserBatteryLevel({
-          level: typeof batteryData.level === "number" ? batteryData.level : Number(batteryData.level ?? NaN),
-          deviceId: asNonEmptyString(batteryData.deviceId) ?? null,
-          updatedAt: asNonEmptyString(batteryData.updatedAt) ?? null,
-        });
+        const extracted = extractBatteryLevelInfo(userPayload.batteryLevel);
+        setCurrentUserBatteryLevel(extracted);
       } else {
         setCurrentUserBatteryLevel(null);
       }
@@ -3495,6 +3130,87 @@ const MapScreen: React.FC = () => {
     void loadCircles(true);
   }, [loadCircles]);
 
+
+  const handleSaveProfile = useCallback(async () => {
+    if (isSavingProfile) return;
+
+    // Basic Validation
+    if (!profileNameInput.trim()) {
+      setProfileModalError("Name cannot be empty.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    setProfileModalError(null);
+
+    try {
+      // 1. Prepare Metadata
+      let metadata: Record<string, any> | undefined;
+      if (profileMetadataInput.trim()) {
+        try {
+          metadata = JSON.parse(profileMetadataInput);
+        } catch {
+          // If simple string or invalid JSON, treat as a single 'bio' field or similar
+          metadata = { bio: profileMetadataInput };
+        }
+      }
+
+      // 2. Call API
+      const result = await updateUserProfile({
+        name: profileNameInput.trim(),
+        metadata,
+        profileImage: profileAvatarUpload ? {
+          uri: profileAvatarUpload.uri,
+          name: profileAvatarUpload.name,
+          type: profileAvatarUpload.type // We rely on prepareImageAsWebp setting this to image/webp
+        } : undefined
+      });
+
+      console.log("Profile update result:", JSON.stringify(result, null, 2));
+
+      // 3. Update Local Storage & State with Robust Parsing
+      // Handle various response structures: { data: { user: ... } } or { user: ... } or { data: ... }
+      const updatedUser =
+        result?.data?.user ??
+        result?.user ??
+        result?.data ??
+        result;
+
+      if (updatedUser) {
+        // Merge with existing stored user to preserve any missing fields
+        const mergedUser = { ...storedUser, ...updatedUser };
+        console.log("Merging user:", JSON.stringify(mergedUser, null, 2));
+        setStoredUser(mergedUser);
+        await AsyncStorage.setItem("user", JSON.stringify(mergedUser));
+
+        // Update current avatar URL if changed
+        const newAvatar = extractAvatarUrl(updatedUser);
+        if (newAvatar) {
+          setCurrentUserAvatarUrl(newAvatar);
+          // If we uploaded a new image, clear the upload state
+          if (profileAvatarUpload) {
+            setProfileAvatarOriginal(newAvatar);
+            setProfileAvatarUpload(null);
+          }
+        }
+      }
+
+      // 4. Close Modal / Feedback
+      // We don't necessarily close the modal on save ("Edit" flow often keeps it open),
+      // but we can show a toast or just success state.
+      // Alert.alert("Success", "Profile updated successfully.");
+
+      // Refresh circles content to show new name/avatar immediately
+      // We do a "soft" refresh by triggering a fetch if possible
+      void loadCircles(true); // force refresh
+
+    } catch (error: any) {
+      console.error("Profile save failed", error);
+      setProfileModalError(error.message || "Failed to update profile.");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  }, [isSavingProfile, profileNameInput, profileMetadataInput, profileAvatarUpload, storedUser, loadCircles]);
 
   // --- EFFECTS ---
 
@@ -3728,28 +3444,19 @@ const MapScreen: React.FC = () => {
       return;
     }
 
-    registerBackgroundLocationTask();
-
     let cancelled = false;
 
     const manageBackgroundLocationUpdates = async () => {
       try {
-        if (!locationSharingEnabled) {
-          const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+        if (!locationSharingEnabled || !selectedCircle) {
+          const hasStarted = await isBackgroundLocationRunning();
           if (hasStarted) {
-            await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+            await stopBackgroundLocation();
           }
           return;
         }
 
-        if (!selectedCircle) {
-          const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
-          if (hasStarted) {
-            await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
-          }
-          return;
-        }
-
+        // Check Permissions
         const foregroundPermissions = await Location.getForegroundPermissionsAsync();
         let foregroundStatus = foregroundPermissions.status;
         if (foregroundStatus !== "granted") {
@@ -3770,20 +3477,9 @@ const MapScreen: React.FC = () => {
           }
         }
 
-        const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+        const hasStarted = await isBackgroundLocationRunning();
         if (!hasStarted) {
-          await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME, {
-            accuracy: Location.Accuracy.High,
-            distanceInterval: 10,
-            deferredUpdatesDistance: 10,
-            showsBackgroundLocationIndicator: Platform.OS === "ios",
-            pausesUpdatesAutomatically: false,
-            foregroundService: {
-              notificationTitle: "Location sharing active",
-              notificationBody: "Sharing your location with the circle.",
-              notificationColor: COLORS.primary,
-            },
-          });
+          await startBackgroundLocation();
         }
       } catch (error) {
         if (!cancelled) {
@@ -4251,10 +3947,10 @@ const MapScreen: React.FC = () => {
   }, [locationHistoryPolylineCoordinates]);
 
   const batteryLevelPercent = useMemo(() => {
-    if (currentUserBatteryLevel?.level === undefined || currentUserBatteryLevel?.level === null) {
+    if (currentUserBatteryLevel?.batteryLevel === undefined || currentUserBatteryLevel?.batteryLevel === null) {
       return null;
     }
-    const numeric = Number(currentUserBatteryLevel.level);
+    const numeric = Number(currentUserBatteryLevel.batteryLevel);
     if (!Number.isFinite(numeric)) {
       return null;
     }
@@ -5011,7 +4707,7 @@ const MapScreen: React.FC = () => {
         if (batteryCandidate) {
           const batteryData = batteryCandidate as Record<string, unknown>;
           setCurrentUserBatteryLevel({
-            level: typeof batteryData.level === "number" ? batteryData.level : Number(batteryData.level ?? NaN),
+            batteryLevel: typeof batteryData.level === "number" ? batteryData.level : Number(batteryData.level ?? NaN),
             deviceId: asNonEmptyString(batteryData.deviceId) ?? null,
             updatedAt: asNonEmptyString(batteryData.updatedAt) ?? null,
           });
@@ -5143,6 +4839,89 @@ const MapScreen: React.FC = () => {
     setProfileAvatarUpload(null);
     setProfileAvatarPreview(profileAvatarOriginal);
   }, [isSavingProfile, profileAvatarOriginal]);
+
+  const handleInitiateEmailVerification = useCallback(async (email: string) => {
+    try {
+      // Use authenticated fetch if the user is logged in to associate the request with their account if needed
+      // Or use the public endpoint if it's a generic verification
+      const response = await authenticatedFetch(`${API_BASE_URL}/auth/initiate-email-verification`, { // Assuming an endpoint for adding/verifying
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      if (!response.ok) {
+        // Fallback to resend-email-verification if the above fails or doesn't exist, generic approach
+        const fallbackResponse = await fetch(`${API_BASE_URL}/auth/resend-email-verification`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await fallbackResponse.json();
+        if (!fallbackResponse.ok) throw new Error(data.message || "Failed to send verification code");
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to initiate email verification.";
+      throw new Error(message);
+    }
+  }, []);
+
+  const handleInitiatePhoneVerification = useCallback(async (phone: string) => {
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/auth/initiate-phone-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber: phone }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to send verification code");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to initiate phone verification.";
+      throw new Error(message);
+    }
+  }, []);
+
+  const handleSubmitEmailVerification = useCallback(async (email: string, code: string) => {
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/auth/verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || "Verification failed");
+
+      // Ideally refresh user profile here
+      // await fetchUserProfile(); 
+      Alert.alert("Success", "Email verified successfully!");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Verification failed.";
+      throw new Error(message);
+    }
+  }, []);
+
+  const handleSubmitPhoneVerification = useCallback(async (phone: string, code: string) => {
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/auth/verify-phone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: phone, code }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || "Verification failed");
+
+      Alert.alert("Success", "Phone verified successfully!");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Verification failed.";
+      throw new Error(message);
+    }
+  }, []);
 
   const handleSubmitProfileUpdate = useCallback(async () => {
     if (isSavingProfile) return;
@@ -5391,6 +5170,53 @@ const MapScreen: React.FC = () => {
   }, [executeLeaveCircle, selectedCircle]);
 
   // --- RENDER HELPERS ---
+
+  // Fetch circle history and update members
+  const fetchCircleHistory = useCallback(async (circleId: string) => {
+    if (!circleId) return;
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/circles/${circleId}/history?page=1&perPage=100`);
+      if (response.ok) {
+        const payload = await response.json();
+        const historyData = payload?.data;
+        if (historyData) {
+          const membersWithHistory = historyData.members || [];
+          const creatorData = historyData.creator;
+
+          // Map history data to a lookup
+          const historyMap = new Map();
+
+          if (creatorData) {
+            historyMap.set(creatorData.id, creatorData.journeys || []);
+          }
+
+          membersWithHistory.forEach((m: any) => {
+            historyMap.set(m.id, m.journeys || []);
+          });
+
+          // Update selectedCircleMembers with new journey data
+          setSelectedCircleMembers(prev => prev.map(member => {
+            const memberId = resolveMemberId(member);
+            if (memberId && historyMap.has(memberId)) {
+              return { ...member, journeys: historyMap.get(memberId) };
+            }
+            return member;
+          }));
+        }
+      }
+    } catch (error) {
+      console.warn("Failed to fetch circle history", error);
+    }
+  }, []);
+
+  // Effect to fetch history when circle changes
+  useEffect(() => {
+    if (selectedCircle?.id) {
+      const circleId = String(selectedCircle.id);
+      void fetchCircleHistory(circleId);
+    }
+  }, [selectedCircle?.id, fetchCircleHistory]);
+
   const mapStylesList: { key: MapType; label: string; icon: string; previewColor: string }[] = [
     { key: 'standard', label: 'Auto', icon: 'map', previewColor: '#84CC16' },
     { key: 'hybrid', label: 'Street', icon: 'map-outline', previewColor: '#60A5FA' },
@@ -5434,101 +5260,69 @@ const MapScreen: React.FC = () => {
       : null;
 
   // Fetch a specific member's location history (today)
-  const fetchMemberLocationHistory = async (memberId: string) => {
-    setLocationHistoryError(null);
-    setLocationHistoryLoading(true);
-    try {
-      const params = new URLSearchParams({ limit: String(LOCATION_HISTORY_LIMIT), offset: "0", filter: "today", userId: memberId });
-      const response = await authenticatedFetch(`${API_BASE_URL}/profile/location-history?${params.toString()}`, {
-        headers: { accept: "application/json" },
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        const message = payload?.message ?? "Failed to load location history.";
-        throw new Error(message);
-      }
-      const records = Array.isArray(payload?.data) ? payload.data : [];
-      const normalized: LocationHistoryEntry[] = records
-        .map((item: any): LocationHistoryEntry | null => {
-          const lat = Number(item?.latitude ?? item?.lat);
-          const lon = Number(item?.longitude ?? item?.lng);
-          const createdAtRaw = asNonEmptyString(item?.createdAt) ?? asNonEmptyString(item?.created_at);
-          if (!Number.isFinite(lat) || !Number.isFinite(lon) || !createdAtRaw) {
-            return null;
-          }
-          return {
-            id: asNonEmptyString(item?.id) ?? `${lat}-${lon}-${createdAtRaw}`,
-            latitude: lat,
-            longitude: lon,
-            createdAt: createdAtRaw,
-            name: asNonEmptyString(item?.name) ?? null,
-            circleId: asNonEmptyString(item?.circleId) ?? asNonEmptyString(item?.circle_id) ?? null,
-          };
-        })
-        .filter((entry: LocationHistoryEntry | null): entry is LocationHistoryEntry => entry !== null);
-      setLocationHistory(normalized);
-      setLocationHistoryActiveFilter("today");
-      setIsLocationHistoryModalVisible(true);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load location history.";
-      setLocationHistoryError(message);
-    } finally {
-      setLocationHistoryLoading(false);
-    }
-  };
+  // const fetchMemberLocationHistory = async (memberId: string) => {
+  //   setLocationHistoryError(null);
+  //   setLocationHistoryLoading(true);
+  //   try {
+  //     const params = new URLSearchParams({ limit: String(LOCATION_HISTORY_LIMIT), offset: "0", filter: "today", userId: memberId });
+  //     const response = await authenticatedFetch(`${API_BASE_URL}/profile/location-history?${params.toString()}`, {
+  //       headers: { accept: "application/json" },
+  //     });
+  //     const payload = await response.json().catch(() => ({}));
+  //     if (!response.ok) {
+  //       const message = payload?.message ?? "Failed to load location history.";
+  //       throw new Error(message);
+  //     }
+  //     const records = Array.isArray(payload?.data) ? payload.data : [];
+  //     const normalized: LocationHistoryEntry[] = records
+  //       .map((item: any): LocationHistoryEntry | null => {
+  //         const lat = Number(item?.latitude ?? item?.lat);
+  //         const lon = Number(item?.longitude ?? item?.lng);
+  //         const createdAtRaw = asNonEmptyString(item?.createdAt) ?? asNonEmptyString(item?.created_at);
+  //         if (!Number.isFinite(lat) || !Number.isFinite(lon) || !createdAtRaw) {
+  //           return null;
+  //         }
+  //         return {
+  //           id: asNonEmptyString(item?.id) ?? `${lat}-${lon}-${createdAtRaw}`,
+  //           latitude: lat,
+  //           longitude: lon,
+  //           createdAt: createdAtRaw,
+  //           name: asNonEmptyString(item?.name) ?? null,
+  //           circleId: asNonEmptyString(item?.circleId) ?? asNonEmptyString(item?.circle_id) ?? null,
+  //         };
+  //       })
+  //       .filter((entry: LocationHistoryEntry | null): entry is LocationHistoryEntry => entry !== null);
+  //     setLocationHistory(normalized);
+  //     setLocationHistoryActiveFilter("today");
+  //     setIsLocationHistoryModalVisible(true);
+  //   } catch (error) {
+  //     const message = error instanceof Error ? error.message : "Failed to load location history.";
+  //     setLocationHistoryError(message);
+  //   } finally {
+  //     setLocationHistoryLoading(false);
+  //   }
+  // };
+
+
+
 
 
 
   // Handler to open journeys modal with a specific member
   const handleOpenMemberJourneysModal = async (member: CircleMember) => {
-    // Show modal immediately with available data (history might be empty initially)
-    setMemberJourneysData([{ ...member, todayLocationHistory: [] }]);
-    setIsMemberJourneysModalVisible(true);
-
+    // If it's the current user, try to inject the latest local battery info
+    let memberData = member;
     const memberId = resolveMemberId(member);
-    if (!memberId) return;
-
-    try {
-      const params = new URLSearchParams({
-        limit: "500",
-        offset: "0",
-        filter: "today",
-        userId: memberId
-      });
-
-      const response = await authenticatedFetch(`${API_BASE_URL}/profile/location-history?${params.toString()}`, {
-        headers: { accept: "application/json" },
-      });
-
-      if (response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        const records = Array.isArray(payload?.data) ? payload.data : [];
-
-        const normalized: LocationHistoryEntry[] = records
-          .map((item: any): LocationHistoryEntry | null => {
-            const lat = Number(item?.latitude ?? item?.lat);
-            const lon = Number(item?.longitude ?? item?.lng);
-            const createdAtRaw = asNonEmptyString(item?.createdAt) ?? asNonEmptyString(item?.created_at);
-            if (!Number.isFinite(lat) || !Number.isFinite(lon) || !createdAtRaw) {
-              return null;
-            }
-            return {
-              id: asNonEmptyString(item?.id) ?? `${lat}-${lon}-${createdAtRaw}`,
-              latitude: lat,
-              longitude: lon,
-              createdAt: createdAtRaw,
-              name: asNonEmptyString(item?.name) ?? null,
-              circleId: asNonEmptyString(item?.circleId) ?? asNonEmptyString(item?.circle_id) ?? null,
-            };
-          })
-          .filter((entry: LocationHistoryEntry | null): entry is LocationHistoryEntry => entry !== null);
-
-        // Update the member data with the fetched history
-        setMemberJourneysData([{ ...member, todayLocationHistory: normalized }]);
-      }
-    } catch (e) {
-      console.warn("Failed to fetch member journeys history", e);
+    if (memberId && currentUserId && memberId === currentUserId && currentUserBatteryLevel) {
+      memberData = {
+        ...member,
+        batteryLevel: currentUserBatteryLevel,
+      };
     }
+
+    // Show modal directly with member data (populated via fetchCircleHistory)
+    setMemberJourneysData(memberData);
+    setIsMemberJourneysModalVisible(true);
   };
 
   const renderMemberMarker = (
@@ -5542,9 +5336,14 @@ const MapScreen: React.FC = () => {
 
     const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
     const memberRecord = memberId ? circleMembersById.get(memberId) : undefined;
+
     const displayName = isCurrentUser
       ? userDisplayName || "You"
       : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Circle member";
+
+    if (memberRecord) {
+      console.log(`[MarkerRecord] ${displayName} battery:`, JSON.stringify(memberRecord));
+    }
     const fallbackSeed =
       memberRecord?.email ??
       memberRecord?.name ??
@@ -5557,16 +5356,16 @@ const MapScreen: React.FC = () => {
       : memberId
         ? memberAvatarUrls[memberId]
         : null;
-    let tempAvatar =
-      typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0
-        ? avatarCandidate.trim()
-        : null;
 
-    if (tempAvatar && tempAvatar.startsWith("/")) {
-      tempAvatar = `${API_BASE_URL}${tempAvatar}`;
-    }
-    if (tempAvatar) {
-      tempAvatar = tempAvatar.replace("/api/uploads", "/uploads");
+    let tempAvatar = null;
+    if (typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0) {
+      const trimmed = avatarCandidate.trim();
+      if (trimmed.startsWith("http") || trimmed.startsWith("file:")) {
+        tempAvatar = trimmed;
+      } else {
+        const relative = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+        tempAvatar = `${API_BASE_URL}${relative}`.replace("/api/uploads", "/uploads");
+      }
     }
 
     const resolvedAvatar = tempAvatar ?? `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
@@ -5575,10 +5374,14 @@ const MapScreen: React.FC = () => {
     const effectiveBatteryInfo = isCurrentUser
       ? currentUserBatteryLevel ?? memberBatteryInfo
       : memberBatteryInfo;
-    const batteryPercent =
-      effectiveBatteryInfo && typeof effectiveBatteryInfo.level === "number" && Number.isFinite(effectiveBatteryInfo.level)
-        ? Math.max(0, Math.min(100, Math.round(effectiveBatteryInfo.level)))
+    const batteryPercent = (() => {
+      if (effectiveBatteryInfo) {
+        console.log(`[MarkerBattery] ${displayName} info:`, JSON.stringify(effectiveBatteryInfo));
+      }
+      return effectiveBatteryInfo && typeof effectiveBatteryInfo.batteryLevel === "number" && Number.isFinite(effectiveBatteryInfo.batteryLevel)
+        ? Math.max(0, Math.min(100, Math.round(effectiveBatteryInfo.batteryLevel)))
         : null;
+    })();
 
     const markerKey = safeMemberId
       ? `member-marker-${safeMemberId}`
@@ -5714,6 +5517,9 @@ const MapScreen: React.FC = () => {
               strokeWidth={1.5}
             />
           ) : null}
+
+          {/* Render Member Journeys (Polylines) */}
+
 
           {/* Render member markers with profile avatars */}
           {Object.entries(memberLocations).map(([memberId, coords]) => {
@@ -5920,6 +5726,13 @@ const MapScreen: React.FC = () => {
           onLogout={handleLogout}
         />
 
+        <MemberJourneysModal
+          visible={isMemberJourneysModalVisible}
+          onClose={() => setIsMemberJourneysModalVisible(false)}
+          member={memberJourneysData}
+          insets={insets}
+        />
+
         {/* --- UNIFIED BOTTOM SHEET (Content and Nav) --- */}
         <Animated.View style={[styles.unifiedSheet, { height: sheetHeight, paddingBottom: insets.bottom + keyboardHeight }]}>
           <View {...panResponder.panHandlers} style={styles.dragHandleContainer}>
@@ -5997,15 +5810,17 @@ const MapScreen: React.FC = () => {
                   let normalizedMemberAvatar = null;
                   if (typeof member.avatar === "string" && member.avatar.trim().length > 0) {
                     const trimmed = member.avatar.trim();
-                    if (trimmed.startsWith("/")) {
-                      normalizedMemberAvatar = `${API_BASE_URL}${trimmed}`.replace("/api/uploads", "/uploads");
-                    } else {
+                    if (trimmed.startsWith("http") || trimmed.startsWith("file:")) {
                       normalizedMemberAvatar = trimmed;
+                    } else {
+                      // Relative path - ensure it starts with / and prepend base URL
+                      const relative = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+                      normalizedMemberAvatar = `${API_BASE_URL}${relative}`.replace("/api/uploads", "/uploads");
                     }
                   }
 
                   // Debug log
-                  //  console.log(`[MemberRendering] ${displayName}: raw=${member.avatar}, final=${avatarUri}, base=${API_BASE_URL}`);
+
 
                   const selfAvatarFallback =
                     memberId && currentUserId && memberId === currentUserId && currentUserAvatarUrl
@@ -6015,6 +5830,8 @@ const MapScreen: React.FC = () => {
                     normalizedMemberAvatar ??
                     selfAvatarFallback ??
                     `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
+
+                  console.log(`[MemberRendering] ${displayName}: raw=${member.avatar}, final=${avatarUri}, base=${API_BASE_URL}`);
 
 
 
@@ -6045,6 +5862,12 @@ const MapScreen: React.FC = () => {
                       </View>
 
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <TouchableOpacity
+                          style={{ padding: 8 }}
+                          onPress={() => setSelectedJourneyMember(member)}
+                        >
+                          <Ionicons name="car-sport-outline" size={20} color="#3B82F6" />
+                        </TouchableOpacity>
                         {(allowEdit || allowRemove) && (
                           <>
                             {allowEdit && (
@@ -6604,13 +6427,71 @@ const MapScreen: React.FC = () => {
           onClose={handleCloseSettingsModal}
           onAccount={handleOpenAccountModal}
           onSmartNotifications={() => {
-            handleCloseSettingsModal();
             handleOpenCircleNotificationSettings();
           }}
           onLocationSharing={() => {
-            // Already handled in SettingsModal or we can add specific handler
+            handleOpenLocationSharingModal();
+          }}
+          onCircleManagement={() => {
+            handleOpenCircleManagementModal();
+          }}
+          onAddPeople={() => {
+            handleOpenAddPeopleModal();
+          }}
+          onLogout={() => {
+            handleCloseSettingsModal();
+            handleLogout();
           }}
         // Pass other handlers as needed or leave optional
+        />
+
+        <LocationSharingModal
+          visible={isLocationSharingModalVisible}
+          onClose={handleCloseLocationSharingModal}
+          isSharing={locationSharingEnabled}
+          onToggleSharing={handleToggleLocationSharing}
+          currentUser={{
+            name: currentMembership?.name || storedUser?.name,
+            avatarUrl: extractAvatarUrl(currentMembership) || currentUserAvatarUrl,
+            initials: currentMembership?.name ? currentMembership.name.substring(0, 2).toUpperCase() : undefined
+          }}
+        />
+
+        <CircleManagementModal
+          visible={isCircleManagementModalVisible}
+          onClose={handleCloseCircleManagementModal}
+          circleName={selectedCircle?.name || ""}
+          isCircleCreator={isCircleCreator}
+          myRole={currentMembership?.Membership?.nickname || normalizeRole((currentMembership?.Membership as any)?.role)}
+          onDeleteCircle={handleDeleteCircle}
+          onLeaveCircle={handleLeaveCircle}
+          onUpdateCircleName={async (newName) => {
+            if (!selectedCircle) return;
+            try {
+              const res = await authenticatedFetch(`${API_BASE_URL}/circles/${selectedCircle.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'accept': 'application/json' },
+                body: JSON.stringify({ name: newName })
+              });
+              if (res.ok) {
+                Alert.alert("Success", "Circle name updated.");
+                // Optimistic update or refresh
+                setSelectedCircle(prev => prev ? ({ ...prev, name: newName }) : null);
+                setCircles(prev => prev.map(c => c.id === selectedCircle.id ? { ...c, name: newName } : c));
+              } else {
+                const d = await res.json().catch(() => ({}));
+                Alert.alert("Error", d.message || "Failed to update circle name.");
+              }
+            } catch (e) {
+              Alert.alert("Error", "Network error updating circle name.");
+            }
+          }}
+          onAddPeople={() => {
+            handleCloseCircleManagementModal();
+            handleOpenAddPeopleModal();
+          }}
+          isDeleting={isDeletingCircle}
+          isLeaving={isLeavingCircle}
         />
 
         <AccountModal
@@ -6642,8 +6523,8 @@ const MapScreen: React.FC = () => {
           canLeaveCircle={Boolean(selectedCircle)}
 
           // Profile Props
-          email={currentMembership?.email ?? undefined}
-          phone={(currentMembership as any)?.phoneNumber ?? (currentMembership as any)?.phone ?? undefined}
+          email={storedUser?.email ?? currentMembership?.email ?? undefined}
+          phone={storedUser?.phoneNumber ?? (currentMembership as any)?.phoneNumber ?? (currentMembership as any)?.phone ?? undefined}
           profileNameInput={profileNameInput}
           setProfileNameInput={setProfileNameInput}
           profileMetadataInput={profileMetadataInput}
@@ -6654,7 +6535,13 @@ const MapScreen: React.FC = () => {
           profileModalError={profileModalError}
           onPickProfileImage={handlePickProfileImage}
           onClearProfileImage={handleClearProfileImage}
-          onSaveProfile={handleSubmitProfileUpdate}
+          onSaveProfile={handleSaveProfile}
+
+          // Verification Handlers
+          onVerifyEmail={handleInitiateEmailVerification}
+          onVerifyPhone={handleInitiatePhoneVerification}
+          onSubmitEmailVerification={handleSubmitEmailVerification}
+          onSubmitPhoneVerification={handleSubmitPhoneVerification}
         />
 
         <NotificationsModal
@@ -7027,9 +6914,9 @@ const MapScreen: React.FC = () => {
 
         {/* --- MEMBER JOURNEYS MODAL --- */}
         <MemberJourneysModal
-          visible={isMemberJourneysModalVisible}
-          onClose={() => setIsMemberJourneysModalVisible(false)}
-          members={memberJourneysData}
+          visible={!!selectedJourneyMember}
+          onClose={() => setSelectedJourneyMember(null)}
+          member={selectedJourneyMember}
           insets={insets}
         />
 

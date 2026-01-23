@@ -6,9 +6,11 @@ import "react-native-reanimated";
 import "../global.css";
 
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { syncLocationQueue } from "@/services/BackgroundLocationService"; // Ensure this is imported to register task
 import { initializeCrashReporter } from "@/utils/crashReporter";
 import { registerNotificationListeners } from "@/utils/notificationListeners";
 import { requestNotificationPermissions } from "@/utils/permissions";
+import NetInfo from "@react-native-community/netinfo";
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -17,6 +19,13 @@ export default function RootLayout() {
   useEffect(() => {
     initializeCrashReporter();
     requestNotificationPermissions();
+
+    // Listen for network state changes to sync offline locations
+    const unsubscribeNetInfo = NetInfo.addEventListener(state => {
+      if (state.isConnected) {
+        syncLocationQueue();
+      }
+    });
 
     const navigateFromNotification = (data: Record<string, string | undefined>) => {
       const candidate =
@@ -34,7 +43,7 @@ export default function RootLayout() {
       const normalized = candidate.startsWith("/") ? candidate : `/screens/${candidate}`;
 
       try {
-        router.push(normalized);
+        router.push(normalized as any);
       } catch (error) {
         console.warn("Failed to navigate from notification", { error, data, normalized });
       }
@@ -44,6 +53,7 @@ export default function RootLayout() {
 
     return () => {
       unsubscribe?.();
+      unsubscribeNetInfo();
     };
   }, [router]);
 

@@ -1,6 +1,60 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 
 export const API_BASE_URL = "https://api.medi.lk/api";
+
+/**
+ * Logs out the user by calling the logout API endpoint, clearing all stored tokens and user data,
+ * and signing out of Google if applicable.
+ */
+export const logout = async (): Promise<void> => {
+  try {
+    const refreshToken = await AsyncStorage.getItem("refreshToken");
+
+    // Call the logout API endpoint if we have a refresh token
+    if (refreshToken) {
+      try {
+        await fetch(`${API_BASE_URL}/auth/logout`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({
+            refreshToken: refreshToken,
+          }),
+        });
+      } catch (apiError) {
+        // Continue with token clearing even if API call fails
+        console.error("Error calling logout API:", apiError);
+      }
+    }
+
+    // Google Sign Out
+    try {
+      await GoogleSignin.signOut();
+    } catch (googleError) {
+      // Ignore if not signed in or other google errors, proceed to clear local storage
+      console.log("Google sign out error (ignorable):", googleError);
+    }
+
+    // Clear tokens and user data regardless of API call success/failure
+    await AsyncStorage.removeItem("authToken");
+    await AsyncStorage.removeItem("refreshToken");
+    await AsyncStorage.removeItem("user");
+
+  } catch (error) {
+    console.error("Error during logout:", error);
+    // Still try to clear tokens and user even if there's an error
+    try {
+      await AsyncStorage.removeItem("authToken");
+      await AsyncStorage.removeItem("refreshToken");
+      await AsyncStorage.removeItem("user");
+    } catch (clearError) {
+      console.error("Error clearing local storage:", clearError);
+    }
+  }
+};
 
 const REQUEST_MIN_INTERVAL_MS = 1000;
 const inFlightRequests = new Map<string, Promise<Response>>();
@@ -188,8 +242,8 @@ export const authenticatedFetch = async (
 
   const response = shouldThrottle
     ? await executeThrottledRequest(throttleKeyToUse, effectiveInterval, () =>
-        performRequest(token)
-      )
+      performRequest(token)
+    )
     : await performRequest(token);
 
   // If we get a 401 (Unauthorized), try to refresh the token and retry
@@ -219,43 +273,216 @@ export const authenticatedFetch = async (
   return response;
 };
 
+
+
 /**
- * Logs out the user by calling the logout API endpoint and clearing all stored tokens
+ * Authenticates the user with Google using the provided ID token
+ * @param idToken - The Google ID token obtained from Google Sign-In
+ * @returns The fetch response
  */
-export const logout = async (): Promise<void> => {
-  try {
-    const refreshToken = await AsyncStorage.getItem("refreshToken");
-    
-    // Call the logout API endpoint if we have a refresh token
-    if (refreshToken) {
-      try {
-        await fetch(`${API_BASE_URL}/auth/logout`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            accept: "application/json",
-          },
-          body: JSON.stringify({
-            refreshToken: refreshToken,
-          }),
-        });
-      } catch (apiError) {
-        // Continue with token clearing even if API call fails
-        console.error("Error calling logout API:", apiError);
-      }
-    }
-    
-    // Clear tokens regardless of API call success/failure
-    await AsyncStorage.removeItem("authToken");
-    await AsyncStorage.removeItem("refreshToken");
-  } catch (error) {
-    console.error("Error during logout:", error);
-    // Still try to clear tokens even if there's an error
-    try {
-      await AsyncStorage.removeItem("authToken");
-      await AsyncStorage.removeItem("refreshToken");
-    } catch (clearError) {
-      console.error("Error clearing tokens:", clearError);
-    }
+export const loginWithGoogle = async (idToken: string): Promise<Response> => {
+  return fetch(`${API_BASE_URL}/auth/google`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      idToken: idToken,
+    }),
+  });
+};
+
+
+/**
+ * Stores the authentication tokens in AsyncStorage
+ * @param accessToken - The access token
+ * @param refreshToken - The refresh token (optional)
+ */
+export const storeTokens = async (accessToken: string, refreshToken?: string): Promise<void> => {
+  await AsyncStorage.setItem("authToken", accessToken);
+  if (refreshToken) {
+    await AsyncStorage.setItem("refreshToken", refreshToken);
   }
+};
+
+// --- Phone Auth APIs ---
+
+/**
+ * Sends an OTP to the provided phone number.
+ * @param phoneNumber The phone number to verify
+ * @param name Optional name for registration
+ */
+export const sendPhoneOtp = async (phoneNumber: string, name?: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/auth/phone/send-otp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      phoneNumber,
+      name,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to send OTP");
+  }
+  return data;
+};
+
+/**
+ * Verifies the OTP and registers or logs in the user.
+ * @param phoneNumber The phone number to verify
+ * @param code The OTP code
+ * @param name Optional name for registration
+ */
+export const verifyPhoneOtp = async (phoneNumber: string, code: string, name?: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/auth/phone/verify-otp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      phoneNumber,
+      code,
+      name,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to verify OTP");
+  }
+  return data;
+};
+
+/**
+ * Resends the OTP to the provided phone number.
+ * @param phoneNumber The phone number
+ */
+export const resendPhoneOtp = async (phoneNumber: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/auth/phone/resend-otp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      phoneNumber,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to resend OTP");
+  }
+  return data;
+};
+
+// --- Email Auth APIs ---
+
+/**
+ * Sends/Resends an email verification code.
+ * @param email The email address to verify
+ */
+export const sendEmailVerification = async (email: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/auth/resend-email-verification`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      email,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to send email verification code");
+  }
+  return data;
+};
+
+/**
+ * Verifies the email with the provided code.
+ * @param email The email address
+ * @param code The verification code
+ */
+export const verifyEmail = async (email: string, code: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/auth/verify-email`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      code,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to verify email");
+  }
+  return data;
+};
+
+// --- Profile Update API ---
+
+/**
+ * Updates the user's profile including name, metadata, and profile image.
+ * Uses multipart/form-data for image uploads.
+ * @param params Object containing name, metadata, and profileImage
+ */
+export const updateUserProfile = async (params: {
+  name?: string;
+  metadata?: Record<string, any>;
+  profileImage?: { uri: string; name: string; type: string };
+}): Promise<any> => {
+  const formData = new FormData();
+
+  if (params.name) {
+    formData.append("name", params.name);
+  }
+
+  if (params.metadata) {
+    formData.append("metadata", JSON.stringify(params.metadata));
+  }
+
+  if (params.profileImage) {
+    formData.append("profileImage", {
+      uri: params.profileImage.uri,
+      name: params.profileImage.name,
+      type: params.profileImage.type,
+    } as any);
+  }
+
+  // Get current token for authorization
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error("No access token found");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/profile`, {
+    method: "PUT",
+    headers: {
+      // Content-Type for multipart/form-data is set automatically by fetch when Body is FormData
+      // We just need the Authorization header
+      Authorization: `Bearer ${token}`,
+      accept: "application/json",
+    },
+    body: formData,
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to update profile");
+  }
+  return data;
 };

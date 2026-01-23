@@ -11,6 +11,8 @@ export interface LocationPoint {
 export interface CircleData {
   id: number | string;
   name?: string;
+  code?: string;
+  invitationCode?: string;
   Locations?: LocationPoint[];
   metadata?: { radius?: number };
   creatorId?: string;
@@ -23,6 +25,21 @@ export interface UserLocation {
   heading?: number;
   accuracy?: number | null;
   speed?: number | null;
+}
+
+export interface JourneyHistoryPoint {
+  id: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+  name?: string | null;
+}
+
+export interface Journey {
+  journeyName: string;
+  startTime: string;
+  endTime: string;
+  history: JourneyHistoryPoint[];
 }
 
 export interface CircleMember {
@@ -40,6 +57,7 @@ export interface CircleMember {
     updatedAt: string;
   } | null;
   todayLocationHistory?: LocationHistoryEntry[];
+  journeys?: Journey[];
   Membership?: {
     nickname?: string;
     role?: string;
@@ -77,7 +95,8 @@ export interface AssignedLocationDetails {
 }
 
 export interface BatteryLevelInfo {
-  level?: number | null;
+  // level?: number | null;
+  batteryLevel?: number | null;
   deviceId?: string | null;
   updatedAt?: string | null;
 }

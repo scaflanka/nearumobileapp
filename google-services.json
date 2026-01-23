@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "225825233910",
-    "project_id": "life-360-push-notifier",
-    "storage_bucket": "life-360-push-notifier.firebasestorage.app"
+    "project_number": "1052253903634",
+    "project_id": "nearu-2da2f",
+    "storage_bucket": "nearu-2da2f.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:225825233910:android:e0904758d838dff81245d7",
+        "mobilesdk_app_id": "1:1052253903634:android:4043f91de229e1a475b1cb",
         "android_client_info": {
           "package_name": "com.Nearu"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAFMETFgK6K2JPa0DpOhqfDZDNEub_T-cs"
+          "current_key": "AIzaSyCioPAPYrkKAv2Eu1HWQARSg3v0x8mLEig"
         }
       ],
       "services": {
