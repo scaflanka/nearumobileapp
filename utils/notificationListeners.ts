@@ -1,75 +1,41 @@
 import messaging, { FirebaseMessagingTypes } from "@react-native-firebase/messaging";
-import { Alert, Platform, ToastAndroid } from "react-native";
+import { Platform } from "react-native";
 
 export type NotificationNavigationHandler = (data: Record<string, string | undefined>) => void;
 
+export type NotificationMessageHandler = (remoteMessage: FirebaseMessagingTypes.RemoteMessage) => void;
+
 export interface NotificationListenerOptions {
   onNavigate?: NotificationNavigationHandler;
+  onMessageReceived?: NotificationMessageHandler;
 }
 
-const backgroundHandlerTag = "BackgroundNotification";
+import { Alert } from "react-native";
 
 let notificationReceptionEnabled = false;
 let activeListenerCleanup: (() => void) | null = null;
 
-try {
-  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-    const messageId =
-      remoteMessage.messageId ?? remoteMessage.data?.messageId ?? remoteMessage.data?.id ?? "unknown";
-    console.log(`${backgroundHandlerTag}: message received`, messageId, remoteMessage.data);
-  });
-} catch (error) {
-  console.warn("Failed to register background message handler", error);
-}
-
-const getTitleAndBody = (
-  remoteMessage: FirebaseMessagingTypes.RemoteMessage
-): { title: string; body: string | undefined } => {
-  const fallbackTitle = remoteMessage.notification?.title ?? remoteMessage.data?.title ?? "Notification";
-  const fallbackBody =
-    remoteMessage.notification?.body ??
-    remoteMessage.data?.body ??
-    remoteMessage.data?.message ??
-    remoteMessage.data?.alert ??
-    undefined;
-
+const getTitleAndBody = (remoteMessage: FirebaseMessagingTypes.RemoteMessage) => {
+  const notification = remoteMessage.notification;
+  const data = remoteMessage.data;
   return {
-    title: fallbackTitle,
-    body: fallbackBody,
+    title: (notification?.title || data?.title || "Notification") as string,
+    body: (notification?.body || data?.body || data?.message || "New message received") as string,
+    data: data,
   };
 };
 
-const displayForegroundAlert = (title: string, body?: string) => {
-  if (!title && !body) {
-    return;
-  }
-
-  if (Platform.OS === "android") {
-    const toastContent = body ? `${title ? `${title}: ` : ""}${body}` : title;
-    ToastAndroid.showWithGravity(toastContent, ToastAndroid.LONG, ToastAndroid.TOP);
-    return;
-  }
-
-  Alert.alert(title || "Notification", body);
+const displayForegroundAlert = (title: string | undefined, body: string | undefined) => {
+  // Simple alert fallback if no custom handler is provided
+  Alert.alert(title || "Notification", body || "");
 };
 
 const handleNavigationIntent = (
   remoteMessage: FirebaseMessagingTypes.RemoteMessage,
   onNavigate?: NotificationNavigationHandler
 ) => {
-  if (!onNavigate) {
-    return;
-  }
-
-  const data = remoteMessage.data ?? {};
-  if (!data || Object.keys(data).length === 0) {
-    return;
-  }
-
-  try {
-    onNavigate(data);
-  } catch (handlerError) {
-    console.warn("Notification navigation handler threw", handlerError);
+  if (onNavigate && remoteMessage.data) {
+    onNavigate(remoteMessage.data as Record<string, string | undefined>);
   }
 };
 
@@ -85,8 +51,15 @@ export const registerNotificationListeners = (
 
   try {
     unsubscribeForeground = messaging().onMessage(async (remoteMessage) => {
-      const { title, body } = getTitleAndBody(remoteMessage);
-      displayForegroundAlert(title, body);
+      if (options?.onMessageReceived) {
+        options.onMessageReceived(remoteMessage);
+      } else {
+        const { title, body } = getTitleAndBody(remoteMessage);
+        const type = remoteMessage.data?.type;
+        if (type !== "location_reached" && type !== "location_left") {
+          displayForegroundAlert(title, body);
+        }
+      }
       handleNavigationIntent(remoteMessage, options?.onNavigate);
     });
   } catch (error) {

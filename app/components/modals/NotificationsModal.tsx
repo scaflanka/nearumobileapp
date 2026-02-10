@@ -9,200 +9,159 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
-import { ThemeColors } from "./SettingsModal";
+import { useAlert } from "../../context/AlertContext";
 
-interface NotificationsModalProps {
-    visible: boolean;
-    onClose: () => void;
-    colors: ThemeColors;
-}
-
-interface NotificationItem {
+interface Notification {
     id: string;
     title: string;
-    body: string;
+    message: string;
     createdAt: string;
     read: boolean;
-    type?: string;
-    data?: any;
+}
+
+interface NotificationsModalProps {
+    isOpen: boolean;
+    onClose: () => void;
 }
 
 const NotificationsModal: React.FC<NotificationsModalProps> = ({
-    visible,
-    onClose,
-    colors,
+    isOpen,
+    onClose
 }) => {
-    const insets = useSafeAreaInsets();
-    const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const { showAlert } = useAlert();
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (isOpen) {
+            fetchNotifications();
+        }
+    }, [isOpen]);
 
     const fetchNotifications = async () => {
         try {
             setLoading(true);
-            setError(null);
-            // Assuming endpoint is /notifications based on standard REST patterns in this app
-            // If /profile/notifications is used for history, maybe /notifications is for user alerts
-            const response = await authenticatedFetch(`${API_BASE_URL}/notifications`, {
-                headers: {
-                    accept: "application/json",
-                },
-            });
-
-            if (!response.ok) {
-                // Fallback to empty if endpoint doesn't exist yet, to avoid showing error to user if backend isn't ready
-                // Check status?
-                if (response.status === 404) {
-                    setNotifications([]);
-                    return;
-                }
-                throw new Error("Failed to load notifications");
+            const response = await authenticatedFetch(`${API_BASE_URL}/notifications`);
+            if (response.ok) {
+                const data = await response.json();
+                setNotifications(Array.isArray(data) ? data : data.data || []);
             }
-
-            const json = await response.json();
-            if (Array.isArray(json.data)) {
-                setNotifications(json.data);
-            } else if (Array.isArray(json)) {
-                setNotifications(json);
-            } else {
-                setNotifications([]);
-            }
-
-        } catch (err) {
-            console.warn("Error fetching notifications:", err);
-            // setError("Could not load notifications."); // Optional: show error or just empty
-            setNotifications([]); // Fail safe
+        } catch (error) {
+            console.error("Failed to fetch notifications", error);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => {
-        if (visible) {
-            fetchNotifications();
+    const handleMarkAsRead = async (id: string) => {
+        try {
+            await authenticatedFetch(`${API_BASE_URL}/notifications/${id}/read`, {
+                method: 'PUT'
+            });
+            setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+        } catch (error) {
+            console.error("Failed to mark notification as read", error);
         }
-    }, [visible]);
+    };
 
-    const renderItem = ({ item }: { item: NotificationItem }) => (
-        <View style={[styles.notificationItem, !item.read && styles.unreadItem]}>
-            <View style={styles.iconContainer}>
-                <Ionicons name="notifications" size={24} color="#0052CC" />
-            </View>
-            <View style={styles.textContainer}>
-                <Text style={styles.title}>{item.title}</Text>
-                <Text style={styles.body}>{item.body}</Text>
-                <Text style={styles.time}>{new Date(item.createdAt).toLocaleString()}</Text>
-            </View>
-        </View>
-    );
+    if (!isOpen) return null;
 
     return (
-        <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
-            <View style={[styles.container, { paddingTop: insets.top }]}>
-                {/* Header */}
+        <Modal
+            visible={isOpen}
+            animationType="slide"
+            transparent={false}
+            onRequestClose={onClose}
+        >
+            <SafeAreaView style={styles.container}>
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                        <Ionicons name="close" size={24} color="#000" />
+                    <TouchableOpacity onPress={onClose} style={styles.backButton}>
+                        <Ionicons name="chevron-back" size={24} color="#113C9C" />
+                        <Text style={styles.headerTitle}>Notifications</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Notifications</Text>
-                    <View style={{ width: 24 }} />
                 </View>
 
                 {loading ? (
-                    <View style={styles.centerContainer}>
-                        <ActivityIndicator size="large" color="#0052CC" />
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#113C9C" />
                     </View>
                 ) : (
                     <FlatList
                         data={notifications}
-                        renderItem={renderItem}
                         keyExtractor={(item) => item.id}
-                        contentContainerStyle={styles.listContent}
+                        renderItem={({ item }) => (
+                            <TouchableOpacity
+                                style={[styles.notificationItem, !item.read && styles.unreadItem]}
+                                onPress={() => handleMarkAsRead(item.id)}
+                            >
+                                <View style={styles.notificationContent}>
+                                    <Text style={styles.notificationTitle}>{item.title}</Text>
+                                    <Text style={styles.notificationMessage}>{item.message}</Text>
+                                    <Text style={styles.notificationTime}>
+                                        {new Date(item.createdAt).toLocaleString()}
+                                    </Text>
+                                </View>
+                                {!item.read && <View style={styles.unreadDot} />}
+                            </TouchableOpacity>
+                        )}
                         ListEmptyComponent={
-                            <View style={styles.centerContainer}>
-                                <Ionicons name="notifications-off-outline" size={48} color="#ccc" />
-                                <Text style={styles.emptyText}>No notifications yet</Text>
+                            <View style={styles.emptyContainer}>
+                                <Ionicons name="notifications-off-outline" size={64} color="#9CA3AF" />
+                                <Text style={styles.emptyText}>No notifications</Text>
                             </View>
                         }
-                        refreshing={loading}
-                        onRefresh={fetchNotifications}
+                        contentContainerStyle={styles.listContent}
                     />
                 )}
-            </View>
+            </SafeAreaView>
         </Modal>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: "#fff",
-    },
+    container: { flex: 1, backgroundColor: "#fff" },
     header: {
         flexDirection: "row",
         alignItems: "center",
-        justifyContent: "space-between",
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderBottomWidth: 1,
-        borderBottomColor: "#eee",
+        borderBottomColor: "#f3f4f6",
     },
-    closeButton: {
-        padding: 4,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: "600",
-        color: "#000",
-    },
-    centerContainer: {
-        flex: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        paddingTop: 60,
-    },
-    listContent: {
-        paddingBottom: 20,
-    },
+    backButton: { flexDirection: "row", alignItems: "center" },
+    headerTitle: { fontSize: 18, fontWeight: "600", color: "#113C9C", marginLeft: 4 },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    listContent: { padding: 16 },
     notificationItem: {
-        flexDirection: "row",
+        backgroundColor: '#fff',
+        borderRadius: 12,
         padding: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: "#f0f0f0",
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        flexDirection: 'row',
+        alignItems: 'flex-start',
     },
     unreadItem: {
-        backgroundColor: "#F0F7FF",
+        backgroundColor: '#EFF6FF',
+        borderColor: '#113C9C',
     },
-    iconContainer: {
-        marginRight: 16,
-        justifyContent: "center",
+    notificationContent: { flex: 1 },
+    notificationTitle: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 4 },
+    notificationMessage: { fontSize: 14, color: '#4B5563', marginBottom: 8 },
+    notificationTime: { fontSize: 12, color: '#9CA3AF' },
+    unreadDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#113C9C',
+        marginLeft: 8,
+        marginTop: 6,
     },
-    textContainer: {
-        flex: 1,
-    },
-    title: {
-        fontSize: 16,
-        fontWeight: "600",
-        color: "#000",
-        marginBottom: 4,
-    },
-    body: {
-        fontSize: 14,
-        color: "#444",
-        marginBottom: 6,
-    },
-    time: {
-        fontSize: 12,
-        color: "#888",
-    },
-    emptyText: {
-        marginTop: 16,
-        fontSize: 16,
-        color: "#888",
-    }
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
+    emptyText: { fontSize: 16, color: '#9CA3AF', marginTop: 16 },
 });
 
-export { NotificationsModal };
-
+export default NotificationsModal;

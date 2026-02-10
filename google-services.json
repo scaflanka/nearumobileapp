@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "1052253903634",
-    "project_id": "nearu-2da2f",
-    "storage_bucket": "nearu-2da2f.firebasestorage.app"
+    "project_number": "928897025070",
+    "project_id": "nearo-tracker",
+    "storage_bucket": "nearo-tracker.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:1052253903634:android:4043f91de229e1a475b1cb",
+        "mobilesdk_app_id": "1:928897025070:android:9d35e78d24e2edd33b0bbf",
         "android_client_info": {
           "package_name": "com.Nearu"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyCioPAPYrkKAv2Eu1HWQARSg3v0x8mLEig"
+          "current_key": "AIzaSyBESVs_5oZZB47D3pHGDM3wdSmXaSxpY8Y"
         }
       ],
       "services": {

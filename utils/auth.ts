@@ -444,11 +444,21 @@ export const updateUserProfile = async (params: {
   name?: string;
   metadata?: Record<string, any>;
   profileImage?: { uri: string; name: string; type: string };
+  email?: string;
+  phoneNumber?: string;
 }): Promise<any> => {
   const formData = new FormData();
 
   if (params.name) {
     formData.append("name", params.name);
+  }
+
+  if (params.email) {
+    formData.append("email", params.email);
+  }
+
+  if (params.phoneNumber) {
+    formData.append("phoneNumber", params.phoneNumber);
   }
 
   if (params.metadata) {
@@ -483,6 +493,30 @@ export const updateUserProfile = async (params: {
   const data = await response.json();
   if (!response.ok) {
     throw new Error(data.message || "Failed to update profile");
+  }
+  return data;
+};
+
+/**
+ * Deletes the user's account/profile.
+ */
+export const deleteUserProfile = async (): Promise<any> => {
+  const token = await getAccessToken();
+  if (!token) {
+    throw new Error("No access token found");
+  }
+
+  const response = await fetch(`${API_BASE_URL}/profile`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      accept: "application/json",
+    },
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to delete account");
   }
   return data;
 };

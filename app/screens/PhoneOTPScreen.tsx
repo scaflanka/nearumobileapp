@@ -6,7 +6,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   NativeSyntheticEvent,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAlert } from '../context/AlertContext'; // Added (using relative path)
 
 const RESEND_INTERVAL_SECONDS = 30;
 const OTP_LENGTH = 6;
@@ -30,6 +30,7 @@ const parseParam = (value?: string | string[]) => {
 
 const PhoneOTPScreen = () => {
   const router = useRouter();
+  const { showAlert } = useAlert(); // Added
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     phoneNumber?: string | string[];
@@ -183,7 +184,7 @@ const PhoneOTPScreen = () => {
         if (devCode) {
           setDevOtpHint(`Development OTP: ${devCode}`);
           if (__DEV__) {
-            Alert.alert('OTP resent', `Use code ${devCode}`);
+            showAlert({ title: 'OTP resent', message: `Use code ${devCode}`, type: 'success' });
           }
         }
 

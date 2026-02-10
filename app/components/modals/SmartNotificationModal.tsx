@@ -14,24 +14,22 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const STORAGE_KEY = "location_sharing_enabled";
+const STORAGE_KEY = "smart_notifications_enabled";
 
-interface LocationSharingModalProps {
+interface SmartNotificationModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSettingsChanged?: (enabled: boolean) => void;
     userName?: string;
     userAvatarUrl?: string | null;
-    userRole?: string | null;
 }
 
-const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
+const SmartNotificationModal: React.FC<SmartNotificationModalProps> = ({
     isOpen,
     onClose,
     onSettingsChanged,
     userName = "User",
     userAvatarUrl = null,
-    userRole = "None"
 }) => {
     const [isEnabled, setIsEnabled] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -47,7 +45,7 @@ const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
             const value = await AsyncStorage.getItem(STORAGE_KEY);
             setIsEnabled(value !== "false"); // Default to true
         } catch (e) {
-            console.warn("Failed to load location sharing settings", e);
+            console.warn("Failed to load smart notification settings", e);
         } finally {
             setLoading(false);
         }
@@ -61,7 +59,7 @@ const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
                 onSettingsChanged(value);
             }
         } catch (error) {
-            console.error("Failed to save location sharing settings", error);
+            console.error("Failed to save smart notification settings", error);
         }
     };
 
@@ -78,25 +76,27 @@ const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onClose} style={styles.backButton}>
                         <Ionicons name="chevron-back" size={24} color="#113C9C" />
-                        <Text style={styles.headerTitle}>Location Sharing</Text>
+                        <Text style={styles.headerTitle}>Smart Notification</Text>
                     </TouchableOpacity>
                 </View>
 
                 <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-                    {/* Device Permissions Card (Simulated Carousel Item) */}
+                    {/* Premium Card */}
                     <View style={styles.permissionsCard}>
                         <View style={styles.permissionIconWrapper}>
                             <View style={styles.phoneIconCircle}>
-                                <Ionicons name="phone-portrait-outline" size={40} color="#113C9C" />
-                                <View style={styles.locationPinOverlap}>
-                                    <Ionicons name="location" size={20} color="#EF4444" />
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <View style={styles.batteryContainer}>
+                                        <View style={styles.batteryFill} />
+                                    </View>
+                                    <View style={styles.batteryTip} />
                                 </View>
                             </View>
                         </View>
                         <View style={styles.permissionTextWrapper}>
-                            <Text style={styles.permissionTitle}>Device Permissions</Text>
+                            <Text style={styles.permissionTitle}>Low battery notification</Text>
                             <Text style={styles.permissionSubtitle}>
-                                NEARU requires your device’s location permission to be “on”. Allow this in your phone settings
+                                Receive notification when a member phone battery drops below 10%
                             </Text>
                         </View>
                     </View>
@@ -105,11 +105,20 @@ const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
                     <View style={styles.dotsContainer}>
                         <View style={[styles.dot, styles.activeDot]} />
                         <View style={styles.dot} />
+                        <View style={styles.dot} />
+                        <View style={styles.dot} />
+                        <View style={styles.dot} />
                     </View>
 
-                    {/* Your Location Sharing Section */}
-                    <Text style={styles.sectionLabel}>Your Location Sharing</Text>
+                    {/* Notification Types List */}
+                    <View style={styles.optionsList}>
+                        <Text style={styles.optionItem}>Low battery notifications</Text>
+                        <Text style={styles.optionItem}>Circle joined notifications</Text>
+                        <Text style={styles.optionItem}>Security notifications</Text>
+                        <Text style={styles.optionItem}>Places notifications</Text>
+                    </View>
 
+                    {/* User Toggle Row */}
                     <View style={styles.userToggleRow}>
                         <View style={styles.avatarWrapper}>
                             <View style={styles.avatarMain}>
@@ -139,10 +148,20 @@ const LocationSharingModal: React.FC<LocationSharingModalProps> = ({
                         )}
                     </View>
 
-                    {/* Circle Member Status Section */}
-                    <View style={styles.statusSection}>
-                        <Text style={styles.sectionLabel}>Circle member status</Text>
-                        <Text style={styles.statusValueText}>{userRole || "None"}</Text>
+                    {/* What happen if you turn off? section */}
+                    <View style={styles.explanationSection}>
+                        <Text style={styles.explanationTitle}>What happen if you turn off?</Text>
+                        <Text style={styles.explanationSubtitle}>When this feature status is off</Text>
+
+                        <View style={styles.bulletPoint}>
+                            <View style={styles.bullet} />
+                            <Text style={styles.bulletText}>Location status will be Disabled</Text>
+                        </View>
+
+                        <View style={styles.bulletPoint}>
+                            <View style={styles.bullet} />
+                            <Text style={styles.bulletText}>Device will not be show on Individual Driver Report or monthly Driving Summary</Text>
+                        </View>
                     </View>
                 </ScrollView>
             </SafeAreaView>
@@ -169,12 +188,13 @@ const styles = StyleSheet.create({
     },
     content: {
         paddingTop: 10,
+        paddingBottom: 40,
     },
     permissionsCard: {
         backgroundColor: '#113C9C',
         borderRadius: 20,
         marginHorizontal: 20,
-        padding: 20,
+        padding: 24,
         flexDirection: 'row',
         alignItems: 'center',
     },
@@ -190,13 +210,28 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         position: 'relative',
     },
-    locationPinOverlap: {
-        position: 'absolute',
-        top: 15,
-        right: 15,
-        backgroundColor: '#fff',
-        borderRadius: 10,
+    batteryContainer: {
+        width: 44,
+        height: 22,
+        borderWidth: 2,
+        borderColor: '#EF4444',
+        borderRadius: 4,
         padding: 2,
+        justifyContent: 'flex-start',
+        flexDirection: 'row',
+    },
+    batteryFill: {
+        backgroundColor: '#EF4444',
+        height: '100%',
+        width: '15%',
+        borderRadius: 1,
+    },
+    batteryTip: {
+        width: 3,
+        height: 8,
+        backgroundColor: '#EF4444',
+        borderTopRightRadius: 2,
+        borderBottomRightRadius: 2,
     },
     permissionTextWrapper: {
         flex: 1,
@@ -216,25 +251,28 @@ const styles = StyleSheet.create({
     dotsContainer: {
         flexDirection: 'row',
         justifyContent: 'center',
-        marginTop: 12,
-        marginBottom: 30,
+        marginTop: 16,
+        marginBottom: 24,
         gap: 6,
     },
     dot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
+        width: 6,
+        height: 6,
+        borderRadius: 3,
         backgroundColor: '#D1D5DB',
     },
     activeDot: {
         backgroundColor: '#113C9C',
     },
-    sectionLabel: {
+    optionsList: {
+        paddingHorizontal: 20,
+        marginBottom: 24,
+    },
+    optionItem: {
         fontSize: 16,
-        color: '#2563EB',
-        fontWeight: '500',
-        marginLeft: 20,
+        color: '#111827',
         marginBottom: 16,
+        fontWeight: '400',
     },
     userToggleRow: {
         flexDirection: 'row',
@@ -242,7 +280,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#E8F0FE',
         paddingVertical: 16,
         paddingHorizontal: 20,
-        marginBottom: 24,
+        marginBottom: 30,
     },
     avatarWrapper: {
         position: 'relative',
@@ -280,19 +318,43 @@ const styles = StyleSheet.create({
     userNameText: {
         flex: 1,
         fontSize: 16,
-        fontWeight: '700',
+        fontWeight: '500',
         color: '#113C9C',
     },
-    statusSection: {
-        paddingHorizontal: 0,
-        marginTop: 8,
-    },
-    statusValueText: {
-        fontSize: 15,
-        color: '#6B7280',
+    explanationSection: {
         paddingHorizontal: 20,
-        marginTop: 4,
+    },
+    explanationTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#113C9C',
+        marginBottom: 12,
+    },
+    explanationSubtitle: {
+        fontSize: 14,
+        color: '#6B7280',
+        marginBottom: 20,
+    },
+    bulletPoint: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        marginBottom: 16,
+        paddingRight: 10,
+    },
+    bullet: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#113C9C',
+        marginTop: 6,
+        marginRight: 12,
+    },
+    bulletText: {
+        fontSize: 14,
+        color: '#113C9C',
+        lineHeight: 20,
+        flex: 1,
     },
 });
 
-export default LocationSharingModal;
+export default SmartNotificationModal;

@@ -5,14 +5,18 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
+import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAlert } from '../context/AlertContext'; // Added
 
 const sanitizeDigits = (value: string) => value.replace(/[^0-9]/g, '');
 
@@ -40,6 +44,8 @@ const ensurePrefixFormat = (value: string) => {
 
 const MobileLogInScreen = () => {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { showAlert } = useAlert(); // Added
   const params = useLocalSearchParams<{
     phonePrefix?: string | string[];
     phoneDigits?: string | string[];
@@ -51,6 +57,14 @@ const MobileLogInScreen = () => {
   const rawNameParam = parseParam(params.name);
 
   const [phonePrefix, setPhonePrefix] = useState(() => (rawPrefixParam ? ensurePrefixFormat(rawPrefixParam) : '+94'));
+  const [countryCode, setCountryCode] = useState<CountryCode>(() => {
+    const p = rawPrefixParam ? ensurePrefixFormat(rawPrefixParam) : '+94';
+    if (p === '+94') return 'LK';
+    if (p === '+1') return 'US';
+    if (p === '+44') return 'GB';
+    if (p === '+91') return 'IN';
+    return 'LK';
+  });
   const [mobileNumber, setMobileNumber] = useState(() => sanitizeDigits(rawDigitsParam));
   const [name, setName] = useState(() => rawNameParam);
   const [loading, setLoading] = useState(false);
@@ -59,7 +73,12 @@ const MobileLogInScreen = () => {
 
   useEffect(() => {
     if (rawPrefixParam) {
-      setPhonePrefix(ensurePrefixFormat(rawPrefixParam));
+      const p = ensurePrefixFormat(rawPrefixParam);
+      setPhonePrefix(p);
+      if (p === '+94') setCountryCode('LK');
+      else if (p === '+1') setCountryCode('US');
+      else if (p === '+44') setCountryCode('GB');
+      else if (p === '+91') setCountryCode('IN');
     }
     if (rawDigitsParam) {
       setMobileNumber(sanitizeDigits(rawDigitsParam));
@@ -115,7 +134,7 @@ const MobileLogInScreen = () => {
         setInfoMessage(message);
 
         const devCode = typeof data?.otp === 'string' ? data.otp : typeof data?.code === 'string' ? data.code : null;
-        Alert.alert('OTP sent', devCode && __DEV__ ? `Use code ${devCode}` : message);
+        showAlert({ title: 'OTP sent', message: devCode && __DEV__ ? `Use code ${devCode}` : message, type: 'success' });
 
         router.push({
           pathname: '/screens/PhoneOTPScreen',
@@ -138,115 +157,137 @@ const MobileLogInScreen = () => {
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.contentContainer}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View style={styles.header}>
-        {/* Logo */}
-        <View style={styles.logoContainer}>
-          <Image
-            source={require('../../assets/logo/image.png')}
-            style={styles.logoImage}
-            contentFit="contain"
-          />
-        </View>
-        <Text style={styles.tagline}>Stay connected with your family</Text>
-      </View>
-
-      <Text style={styles.label}>Name</Text>
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your name"
-          placeholderTextColor="#9CA3AF"
-          value={name}
-          onChangeText={setName}
-          editable={!loading}
-          autoCapitalize="words"
-        />
-      </View>
-
-      <Text style={styles.label}>Phone Number</Text>
-      <View style={[styles.inputContainer, styles.phoneRow]}>
-        <TextInput
-          style={styles.prefixInput}
-          placeholder="+94"
-          placeholderTextColor="#9CA3AF"
-          value={phonePrefix}
-          onChangeText={(value) => {
-            const sanitized = value.replace(/[^0-9+]/g, '');
-            const stripped = sanitized.startsWith('+') ? sanitized.slice(1) : sanitized.replace(/^\++/, '');
-            const digitsOnly = sanitizeDigits(stripped);
-            setPhonePrefix(`+${digitsOnly}`);
-          }}
-          editable={!loading}
-          keyboardType="phone-pad"
-        />
-        <View style={styles.verticalDivider} />
-        <TextInput
-          style={styles.phoneInput}
-          placeholder="Enter your phone number"
-          placeholderTextColor="#9CA3AF"
-          value={mobileNumber}
-          onChangeText={(value) => setMobileNumber(value.replace(/[^0-9]/g, ''))}
-          editable={!loading}
-          keyboardType="phone-pad"
-          maxLength={15}
-        />
-      </View>
-
-      <TouchableOpacity onPress={() => router.push('/screens/ForgotPasswordRequest')}>
-        <Text style={styles.forgotPasswordText}>Forgot password?</Text>
-      </TouchableOpacity>
-
-      {(infoMessage || errorMessage) && (
-        <Text style={[styles.messageText, infoMessage ? styles.infoText : styles.errorText]}>
-          {infoMessage || errorMessage}
-        </Text>
-      )}
-
-      <TouchableOpacity
-        style={styles.loginButton}
-        onPress={handleSendOtp}
-        disabled={!isFormValid || loading}
+    <SafeAreaView style={styles.container} edges={['right', 'left', 'top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.loginButtonText}>Log In</Text>
-        )}
-      </TouchableOpacity>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={[styles.contentContainer, { paddingBottom: 40 }]}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.header}>
+            {/* Logo */}
+            <View style={styles.logoContainer}>
+              <Image
+                source={require('../../assets/logo/image.png')}
+                style={styles.logoImage}
+                contentFit="contain"
+              />
+            </View>
+            <Text style={styles.tagline}>Stay connected with your family</Text>
+          </View>
 
-      <View style={styles.orContainer}>
-        <View style={styles.divider} />
-        <Text style={styles.orText}>or</Text>
-        <View style={styles.divider} />
-      </View>
+          <Text style={styles.label}>Name</Text>
+          <View style={styles.inputContainer}>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your name"
+              placeholderTextColor="#9CA3AF"
+              value={name}
+              onChangeText={setName}
+              editable={!loading}
+              autoCapitalize="words"
+            />
+          </View>
 
-      <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Google Login */ }}>
-        <Image
-          source={require('../../assets/images/google-logo.png')}
-          style={styles.socialIcon}
-          contentFit="contain"
-        />
-        <Text style={styles.socialButtonText}>Continue with Google</Text>
-      </TouchableOpacity>
+          <Text style={styles.label}>Phone Number</Text>
+          <View style={[styles.inputContainer, styles.phoneRow]}>
+            <View style={styles.countryPickerContainer}>
+              <CountryPicker
+                countryCode={countryCode}
+                withFilter
+                withFlag
+                withAlphaFilter
+                withCallingCode
+                withCallingCodeButton
+                onSelect={(country: Country) => {
+                  setCountryCode(country.cca2);
+                  setPhonePrefix(`+${country.callingCode[0]}`);
+                }}
+                containerButtonStyle={styles.countryPickerButton}
+                modalProps={{
+                  animationType: 'slide',
+                  presentationStyle: 'fullScreen',
+                }}
+                filterProps={{
+                  placeholder: 'Search for your country',
+                  style: {
+                    paddingTop: insets.top > 0 ? insets.top : 20,
+                  }
+                }}
+              />
+            </View>
+            <View style={styles.verticalDivider} />
+            <TextInput
+              style={styles.phoneInput}
+              placeholder="Enter your phone number"
+              placeholderTextColor="#9CA3AF"
+              value={mobileNumber}
+              onChangeText={(value) => setMobileNumber(value.replace(/[^0-9]/g, ''))}
+              editable={!loading}
+              keyboardType="phone-pad"
+              maxLength={15}
+            />
+          </View>
 
-      <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Apple Login */ }}>
-        <AntDesign name="apple" size={24} color="#000" />
-        <Text style={styles.socialButtonText}>Continue with Apple</Text>
-      </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push('/screens/ForgotPasswordRequest')}>
+            <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+          </TouchableOpacity>
 
-      <View style={styles.signUpContainer}>
-        <Text style={styles.signUpText}>Don't have an account?</Text>
-        <TouchableOpacity onPress={() => router.push('/screens/RegisterScreen')}>
-          <Text style={styles.signUpLink}>Register</Text>
-        </TouchableOpacity>
-      </View>
+          {(infoMessage || errorMessage) && (
+            <Text style={[styles.messageText, infoMessage ? styles.infoText : styles.errorText]}>
+              {infoMessage || errorMessage}
+            </Text>
+          )}
 
-    </ScrollView>
+          <TouchableOpacity
+            style={styles.loginButton}
+            onPress={handleSendOtp}
+            disabled={!isFormValid || loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.loginButtonText}>Log In</Text>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.orContainer}>
+            <View style={styles.divider} />
+            <Text style={styles.orText}>or</Text>
+            <View style={styles.divider} />
+          </View>
+
+          <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Google Login */ }}>
+            <Image
+              source={require('../../assets/images/google-logo.png')}
+              style={styles.socialIcon}
+              contentFit="contain"
+            />
+            <Text style={styles.socialButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Apple Login */ }}>
+            <AntDesign name="apple" size={24} color="#000" />
+            <Text style={styles.socialButtonText}>Continue with Apple</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => router.push('/screens/LogInScreen')} style={{ marginTop: 12 }}>
+            <Text style={styles.emailSignInText}>Sign in with Email</Text>
+          </TouchableOpacity>
+
+          <View style={styles.signUpContainer}>
+            <Text style={styles.signUpText}>Don't have an account?</Text>
+            <TouchableOpacity onPress={() => router.push('/screens/RegisterScreen')}>
+              <Text style={styles.signUpLink}>Register</Text>
+            </TouchableOpacity>
+          </View>
+
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -257,9 +298,11 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingHorizontal: 24,
-    paddingTop: 80,
-    paddingBottom: 40,
+    paddingTop: 20,
     flexGrow: 1,
+  },
+  flex: {
+    flex: 1,
   },
   header: {
     alignItems: 'center',
@@ -302,6 +345,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     color: '#374151',
+  },
+  countryPickerContainer: {
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 80,
+  },
+  countryPickerButton: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   prefixInput: {
     paddingVertical: 12,
@@ -399,7 +453,14 @@ const styles = StyleSheet.create({
   signUpLink: {
     color: '#1E40AF',
     fontWeight: 'bold'
-  }
+  },
+  emailSignInText: {
+    color: '#1E40AF',
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
 });
 
 export default MobileLogInScreen;

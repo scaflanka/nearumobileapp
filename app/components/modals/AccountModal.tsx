@@ -1,8 +1,8 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import React from "react";
+import * as ImagePicker from "expo-image-picker";
+import React, { useEffect, useState } from "react";
 import {
     ActivityIndicator,
-    Alert,
     Image,
     Modal,
     ScrollView,
@@ -14,469 +14,563 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
+    API_BASE_URL,
+    authenticatedFetch,
+    deleteUserProfile,
+    logout,
     resendPhoneOtp,
     sendEmailVerification,
     sendPhoneOtp,
     storeTokens,
+    updateUserProfile,
     verifyEmail,
     verifyPhoneOtp
 } from "../../../utils/auth";
-import { ThemeColors } from "./SettingsModal";
+import { useAlert } from "../../context/AlertContext";
+
+const COLORS = {
+    primary: "#113C9C",
+    accent: "#EF4444",
+    white: "#FFFFFF",
+    black: "#1A1A1A",
+    gray: "#6B7280",
+    lightGray: "#F3F4F6",
+    success: "#22C55E",
+};
 
 interface AccountModalProps {
-    visible: boolean;
+    isOpen: boolean;
     onClose: () => void;
-    colors: ThemeColors;
-
-    // Profile Props
-    profileNameInput: string;
-    setProfileNameInput: (text: string) => void;
-    // profileMetadataInput is hidden in new design or moved, but we'll keep it available if needed
-    profileMetadataInput: string;
-    setProfileMetadataInput: (text: string) => void;
-    profileAvatarPreview: string | null;
-    isSavingProfile: boolean;
-    isPickingProfileImage: boolean;
-    profileModalError: string | null;
-    onPickProfileImage: () => void;
-    onClearProfileImage: () => void;
-    onSaveProfile: () => void;
-
-    // New Contact Props
-    email?: string;
-    phone?: string;
-
-    onPressLocationHistory: () => void;
-    onPressLogout: () => void;
-    isCircleCreator: boolean;
-    onPressDeleteCircle: () => void;
-    onPressLeaveCircle: () => void;
-    isDeletingCircle: boolean;
-    isLeavingCircle: boolean;
-    canDeleteCircle: boolean;
-    canLeaveCircle: boolean;
-    onVerifyEmail?: (email: string) => Promise<void>;
-    // Deprecated props for phone verification as we handle it directly
-    onVerifyPhone?: (phone: string) => Promise<void>;
-    onSubmitEmailVerification?: (email: string, code: string) => Promise<void>;
-    onSubmitPhoneVerification?: (phone: string, code: string) => Promise<void>;
+    onLogout?: () => void;
 }
 
 const AccountModal: React.FC<AccountModalProps> = ({
-    visible,
+    isOpen,
     onClose,
-    colors,
-
-    profileNameInput,
-    setProfileNameInput,
-    profileAvatarPreview,
-    isSavingProfile,
-    isPickingProfileImage,
-    profileModalError,
-    onPickProfileImage,
-    onSaveProfile,
-
-    email,
-    phone,
-
-    onPressLocationHistory,
-    onPressLogout,
-    isCircleCreator,
-    onPressDeleteCircle,
-    onPressLeaveCircle,
-    isDeletingCircle,
-    isLeavingCircle,
-    canDeleteCircle,
-    canLeaveCircle,
-
-    // New verification props
-    onVerifyEmail,
-    onVerifyPhone,
-    onSubmitEmailVerification,
-    onSubmitPhoneVerification,
-
+    onLogout
 }) => {
+    const { showAlert } = useAlert();
     const insets = useSafeAreaInsets();
 
-    // Local State for Verification Flow
-    const [verificationType, setVerificationType] = React.useState<'email' | 'phone' | null>(null);
-    const [verificationStep, setVerificationStep] = React.useState<'input' | 'otp'>('input');
-    const [verificationInput, setVerificationInput] = React.useState('');
-    const [otpInput, setOtpInput] = React.useState('');
-    const [verificationError, setVerificationError] = React.useState<string | null>(null);
-    const [isVerifying, setIsVerifying] = React.useState(false);
-    const [isResending, setIsResending] = React.useState(false);
+    const [profileNameInput, setProfileNameInput] = useState("");
+    const [profileAvatarPreview, setProfileAvatarPreview] = useState<string | null>(null);
+    const [email, setEmail] = useState("");
+    const [phone, setPhone] = useState("");
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSavingProfile, setIsSavingProfile] = useState(false);
+    const [isPickingProfileImage, setIsPickingProfileImage] = useState(false);
+    const [profileModalError, setProfileModalError] = useState<string | null>(null);
+    const [verificationType, setVerificationType] = useState<'email' | 'phone' | null>(null);
+    const [verificationStep, setVerificationStep] = useState<'input' | 'otp'>('input');
+    const [verificationInput, setVerificationInput] = useState('');
+    const [otpInput, setOtpInput] = useState('');
+    const [verificationError, setVerificationError] = useState<string | null>(null);
+    const [isVerifying, setIsVerifying] = useState(false);
+    const [isResending, setIsResending] = useState(false);
 
-    const handleInitiateVerification = async () => {
-        if (!verificationInput) {
-            setVerificationError("Please enter a valid value");
+    useEffect(() => {
+        if (isOpen) {
+            fetchUserProfile();
+        }
+    }, [isOpen]);
+
+    const normalizeAvatarUrl = (url: string | null) => {
+        if (!url) return null;
+        if (url.startsWith("http") || url.startsWith("file:") || url.startsWith("data:")) {
+            return url;
+        }
+        const relative = url.startsWith("/") ? url : `/${url}`;
+        return `${API_BASE_URL}${relative}`.replace("/api/uploads", "/uploads");
+    };
+
+    const fetchUserProfile = async () => {
+        try {
+            setIsLoading(true);
+            const response = await authenticatedFetch(`${API_BASE_URL}/profile`);
+            if (response.ok) {
+                const data = await response.json();
+                const user = data.data || data;
+                setProfileNameInput(user.name || "");
+                setEmail(user.email || "");
+                setPhone(user.phoneNumber || "");
+                if (user.avatar) {
+                    const normalized = normalizeAvatarUrl(user.avatar);
+                    if (normalized) {
+                        setProfileAvatarPreview(`${normalized}${normalized.includes('?') ? '&' : '?'}t=${Date.now()}`);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("Failed to fetch profile", error);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handlePickProfileImage = async () => {
+        setIsPickingProfileImage(true);
+        try {
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== "granted") {
+                showAlert({ title: "Permission denied", message: "We need access to your photos to set a profile picture.", type: 'warning' });
+                return;
+            }
+
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.5,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const asset = result.assets[0];
+                setProfileAvatarPreview(asset.uri);
+                await handleSaveProfile(asset);
+            }
+        } catch (error) {
+            console.error("Error picking image:", error);
+            showAlert({ title: "Error", message: "Failed to pick image.", type: 'error' });
+        } finally {
+            setIsPickingProfileImage(false);
+        }
+    };
+
+    const handleSaveProfile = async (imageAsset?: any) => {
+        setIsSavingProfile(true);
+        setProfileModalError(null);
+        try {
+            const updateParams: any = {
+                name: profileNameInput.trim(),
+            };
+
+            // Preserve existing email and phone
+            if (email) updateParams.email = email;
+            if (phone) updateParams.phoneNumber = phone;
+
+            if (imageAsset) {
+                const uri = imageAsset.uri;
+                const fileName = uri.split('/').pop() || "profile.jpg";
+                const match = /\.(\w+)$/.exec(fileName);
+                const type = match ? `image/${match[1]}` : `image/jpeg`;
+
+                updateParams.profileImage = {
+                    uri: uri,
+                    name: fileName,
+                    type: type,
+                };
+            }
+
+            await updateUserProfile(updateParams);
+            await fetchUserProfile();
+        } catch (error: any) {
+            console.error("Error saving profile:", error);
+            setProfileModalError(error.message || "Failed to save profile.");
+        } finally {
+            setIsSavingProfile(false);
+        }
+    };
+
+    const handleStartVerification = (type: 'email' | 'phone') => {
+        setVerificationType(type);
+        setVerificationStep('input');
+        setVerificationInput(type === 'email' ? email : phone);
+        setOtpInput('');
+        setVerificationError(null);
+    };
+
+    const handleSendVerificationCode = async () => {
+        if (!verificationInput.trim()) {
+            setVerificationError(`Please enter your ${verificationType === 'email' ? 'email address' : 'phone number'}.`);
             return;
         }
+
         setIsVerifying(true);
         setVerificationError(null);
+
         try {
-            if (verificationType === 'email') {
-                await sendEmailVerification(verificationInput);
-                if (__DEV__) {
-                    Alert.alert("Dev", "Code sent! Check your email (or server logs).");
-                }
-                setVerificationStep('otp');
-            } else if (verificationType === 'phone') {
-                // Use direct API call for phone
-                const result = await sendPhoneOtp(verificationInput, profileNameInput);
-                if (result.success) {
-                    if (__DEV__ && result.otp) {
-                        Alert.alert("Dev Mode", `OTP is: ${result.otp}`);
-                    }
-                    setVerificationStep('otp');
-                }
+            if (verificationType === 'phone') {
+                await sendPhoneOtp(verificationInput, profileNameInput);
             } else {
-                setVerificationError("Verification method not implemented or missing handler");
+                await sendEmailVerification(verificationInput);
             }
-        } catch (e: any) {
-            console.error(e);
-            setVerificationError(e.message || 'Failed to send code');
+            setVerificationStep('otp');
+        } catch (error: any) {
+            setVerificationError(error.message || "Failed to send verification code.");
         } finally {
             setIsVerifying(false);
         }
     };
 
-    const handleResendOtp = async () => {
-        if (!verificationInput) return;
+    const handleVerifyCode = async () => {
+        if (!otpInput.trim()) {
+            setVerificationError("Please enter the verification code.");
+            return;
+        }
 
+        setIsVerifying(true);
+        setVerificationError(null);
+
+        try {
+            let result;
+            if (verificationType === 'phone') {
+                result = await verifyPhoneOtp(verificationInput, otpInput, profileNameInput);
+            } else {
+                result = await verifyEmail(verificationInput, otpInput);
+            }
+
+            if (result && result.token) {
+                // Update profile with BOTH identifiers to ensure they are linked and preserved
+                const updateParams: any = {
+                    name: profileNameInput
+                };
+
+                if (verificationType === 'phone') {
+                    updateParams.phoneNumber = verificationInput;
+                    if (email) updateParams.email = email;
+                } else {
+                    updateParams.email = verificationInput;
+                    if (phone) updateParams.phoneNumber = phone;
+                }
+
+                await updateUserProfile(updateParams);
+
+                // Always store the latest token returned by the verification step
+                await storeTokens(result.token, result.refreshToken);
+
+                showAlert({
+                    title: "Success",
+                    message: `${verificationType === 'phone' ? 'Phone number' : 'Email address'} has been verified and added to your account.`,
+                    type: 'success'
+                });
+
+                setVerificationType(null);
+                await fetchUserProfile();
+            } else {
+                throw new Error("Verification failed. Please check the code.");
+            }
+        } catch (error: any) {
+            setVerificationError(error.message || "Verification failed.");
+        } finally {
+            setIsVerifying(false);
+        }
+    };
+
+    const handleResendCode = async () => {
         setIsResending(true);
         setVerificationError(null);
         try {
             if (verificationType === 'phone') {
-                const result = await resendPhoneOtp(verificationInput);
-                if (__DEV__ && result.otp) {
-                    Alert.alert("Dev Mode", `OTP is: ${result.otp}`);
-                }
-                Alert.alert("Success", "OTP code resent successfully");
-            } else if (verificationType === 'email') {
+                await resendPhoneOtp(verificationInput);
+            } else {
                 await sendEmailVerification(verificationInput);
-                Alert.alert("Success", "Verification code resent successfully");
             }
-
-        } catch (e: any) {
-            console.error(e);
-            setVerificationError(e.message || "Failed to resend code");
+            showAlert({ title: "Code Sent", message: "A new verification code has been sent.", type: 'success' });
+        } catch (error: any) {
+            setVerificationError(error.message || "Failed to resend code.");
         } finally {
             setIsResending(false);
         }
     };
 
-    const handleSubmitVerification = async () => {
-        if (!otpInput) {
-            setVerificationError("Please enter the code");
-            return;
-        }
-        setIsVerifying(true);
-        setVerificationError(null);
-        try {
-            if (verificationType === 'email') {
-                const result = await verifyEmail(verificationInput, otpInput);
-                if (result.success) {
-                    Alert.alert("Success", "Email verified!");
-                    // Trigger profile update/refresh
-                    onSaveProfile();
+    const handleDeleteAccount = async () => {
+        showAlert({
+            title: "Delete Account",
+            message: "Are you sure you want to delete your account? This action is permanent and cannot be undone.",
+            type: 'confirmation',
+            buttons: [
+                { text: "Cancel", style: "cancel", onPress: () => { } },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            setIsSavingProfile(true);
+                            await deleteUserProfile();
+                            await logout();
+                            onClose();
+                            showAlert({ title: "Account Deleted", message: "Your account has been successfully deleted.", type: 'success' });
+                        } catch (error: any) {
+                            showAlert({ title: "Error", message: error.message || "Failed to delete account.", type: 'error' });
+                        } finally {
+                            setIsSavingProfile(false);
+                        }
+                    }
                 }
-            } else if (verificationType === 'phone') {
-                // Use direct API call for phone
-                const result = await verifyPhoneOtp(verificationInput, otpInput, profileNameInput);
-                if (result.success && result.token) {
-                    await storeTokens(result.token, result.refreshToken);
+            ]
+        });
+    };
 
-                    // Call profile update to sync battery level or other metadata if needed
-                    // as per user instructions: "after call PUT /api/profile"
-                    // Although Verify returns user object, we follow instruction to ensure consistency
-                    onSaveProfile();
-
-                    Alert.alert("Success", "Phone number verified!");
-                }
-            }
-            // Reset on success
-            setVerificationType(null);
-            setVerificationInput('');
-            setOtpInput('');
-            setVerificationStep('input');
-        } catch (e: any) {
-            console.error(e);
-            setVerificationError(e.message || 'Verification failed');
-        } finally {
-            setIsVerifying(false);
+    const handleLogout = async () => {
+        if (onLogout) {
+            onLogout();
+        } else {
+            showAlert({
+                title: "Log Out",
+                message: "Are you sure you want to log out?",
+                type: 'confirmation',
+                buttons: [
+                    { text: "Cancel", style: "cancel", onPress: () => { } },
+                    {
+                        text: "Log Out",
+                        style: "destructive",
+                        onPress: async () => {
+                            await logout();
+                            onClose();
+                        }
+                    }
+                ]
+            });
         }
     };
 
+    if (!isOpen) return null;
+
     return (
-        <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
+        <Modal
+            visible={isOpen}
+            animationType="slide"
+            transparent={false}
+            onRequestClose={onClose}
+        >
             <View style={[styles.container, { paddingTop: insets.top }]}>
-                {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onClose} style={styles.backButton}>
                         <Ionicons name="chevron-back" size={24} color="#0052CC" />
-                        <Text style={styles.backText}>Account</Text>
+                        <Text style={styles.backText}>Back</Text>
                     </TouchableOpacity>
+                    <Text style={styles.headerTitle}>Account</Text>
+                    <View style={{ width: 60 }} />
                 </View>
 
-                <ScrollView contentContainerStyle={styles.content}>
-
-                    {/* Blue Profile Header Section */}
-                    <View style={styles.profileHeader}>
-                        <View style={styles.avatarContainer}>
-                            <View style={[styles.avatarWrapper, { backgroundColor: '#00154D' }]}>
-                                {profileAvatarPreview ? (
-                                    <Image source={{ uri: profileAvatarPreview }} style={styles.avatarImage} />
-                                ) : (
-                                    <Text style={styles.avatarInitials}>
-                                        {(profileNameInput || "User").substring(0, 2).toUpperCase()}
-                                    </Text>
-                                )}
-                            </View>
-                            <TouchableOpacity
-                                style={styles.cameraBadge}
-                                onPress={onPickProfileImage}
-                                disabled={isSavingProfile || isPickingProfileImage}
-                            >
-                                {isPickingProfileImage ? (
-                                    <ActivityIndicator size="small" color="#555" />
-                                ) : (
-                                    <Ionicons name="camera-outline" size={14} color="#555" />
-                                )}
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={styles.nameInputContainer}>
-                            <TextInput
-                                style={styles.nameInput}
-                                value={profileNameInput}
-                                onChangeText={setProfileNameInput}
-                                placeholder="Your Name"
-                                placeholderTextColor="#A0A0A0"
-                                onEndEditing={onSaveProfile} // Valid behavior for "Save on blur/enter" or we can add an explicit button
-                            />
-                        </View>
+                {isLoading ? (
+                    <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                        <ActivityIndicator size="large" color={COLORS.primary} />
                     </View>
-
-                    <View style={styles.bodyContent}>
-
-                        {/* Account Details */}
-                        <Text style={styles.sectionTitle}>Account Details</Text>
-                        <View style={styles.detailsList}>
-                            {/* Phone */}
-                            <View style={styles.detailItem}>
-                                <View style={styles.detailIconWrapper}>
-                                    <Ionicons name="phone-portrait-outline" size={24} color="#00154D" />
-                                </View>
-                                <View style={styles.detailTextWrapper}>
-                                    <View style={styles.detailRow}>
-                                        <Text style={styles.detailLabel}>Phone Number</Text>
-                                        {phone ? (
-                                            <Text style={[styles.statusBadge, { color: '#22C55E' }]}>Verified</Text>
-                                        ) : (
-                                            <TouchableOpacity onPress={() => {
-                                                setVerificationType('phone');
-                                                setVerificationStep('input');
-                                                setVerificationInput('');
-                                                setVerificationError(null);
-                                            }}>
-                                                <Text style={[styles.statusBadge, { color: '#0052CC', textDecorationLine: 'underline' }]}>Add</Text>
-                                            </TouchableOpacity>
-                                        )}
-                                    </View>
-                                    <Text style={styles.detailValue}>{phone || "Not set"}</Text>
-                                </View>
-                            </View>
-
-                            {/* Email */}
-                            <View style={styles.detailItem}>
-                                <View style={styles.detailIconWrapper}>
-                                    <MaterialCommunityIcons name="email-outline" size={24} color="#00154D" />
-                                </View>
-                                <View style={styles.detailTextWrapper}>
-                                    <View style={styles.detailRow}>
-                                        <Text style={styles.detailLabel}>Email Address</Text>
-                                        {email ? (
-                                            <Text style={[styles.statusBadge, { color: '#22C55E' }]}>Verified</Text>
-                                        ) : (
-                                            <TouchableOpacity onPress={() => {
-                                                setVerificationType('email');
-                                                setVerificationStep('input');
-                                                setVerificationInput('');
-                                                setVerificationError(null);
-                                            }}>
-                                                <Text style={[styles.statusBadge, { color: '#0052CC', textDecorationLine: 'underline' }]}>Add</Text>
-                                            </TouchableOpacity>
-                                        )}
-                                    </View>
-                                    <Text style={styles.detailValue}>{email || "Not set"}</Text>
-                                </View>
-                                {!email && (
-                                    <View style={styles.alertIconWrapper}>
-                                        <Ionicons name="alert-circle" size={24} color="#FF3B30" />
-                                    </View>
-                                )}
-                            </View>
-
-                            {/* Verification Inline Modal/Area */}
-                            {verificationType && (
-                                <View style={styles.verificationContainer}>
-                                    <Text style={styles.verificationTitle}>
-                                        {verificationStep === 'input'
-                                            ? `Add ${verificationType === 'email' ? 'Email' : 'Phone Number'}`
-                                            : `Verify ${verificationType === 'email' ? 'Email' : 'Phone Number'}`}
-                                    </Text>
-
-                                    {verificationStep === 'input' ? (
-                                        <>
-                                            <TextInput
-                                                style={styles.verificationInput}
-                                                placeholder={verificationType === 'email' ? "Enter email address" : "Enter phone number"}
-                                                value={verificationInput}
-                                                onChangeText={setVerificationInput}
-                                                autoCapitalize="none"
-                                                keyboardType={verificationType === 'email' ? 'email-address' : 'phone-pad'}
-                                            />
-                                            <View style={styles.verificationButtons}>
-                                                <TouchableOpacity
-                                                    style={styles.verificationCancelButton}
-                                                    onPress={() => setVerificationType(null)}
-                                                >
-                                                    <Text style={styles.verificationCancelText}>Cancel</Text>
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    style={styles.verificationSubmitButton}
-                                                    onPress={handleInitiateVerification}
-                                                    disabled={isVerifying}
-                                                >
-                                                    {isVerifying ? (
-                                                        <ActivityIndicator size="small" color="#fff" />
-                                                    ) : (
-                                                        <Text style={styles.verificationSubmitText}>Send Code</Text>
-                                                    )}
-                                                </TouchableOpacity>
-                                            </View>
-                                        </>
+                ) : (
+                    <ScrollView contentContainerStyle={styles.content}>
+                        <View style={styles.profileHeader}>
+                            <View style={styles.avatarContainer}>
+                                <View style={[styles.avatarWrapper, { backgroundColor: '#00154D' }]}>
+                                    {profileAvatarPreview ? (
+                                        <Image source={{ uri: profileAvatarPreview }} style={styles.avatarImage} />
                                     ) : (
-                                        <>
-                                            <Text style={styles.verificationSubtitle}>
-                                                Enter the code sent to {verificationInput} from your {verificationType === 'email' ? 'email' : 'SMS'}
-                                            </Text>
-                                            <TextInput
-                                                style={styles.verificationInput}
-                                                placeholder="Enter verification code"
-                                                value={otpInput}
-                                                onChangeText={setOtpInput}
-                                                keyboardType="number-pad"
-                                            />
-                                            <View style={styles.verificationButtons}>
-                                                {verificationType === 'phone' && (
-                                                    <TouchableOpacity
-                                                        style={styles.verificationCancelButton}
-                                                        onPress={handleResendOtp}
-                                                        disabled={isResending}
-                                                    >
-                                                        {isResending ? <ActivityIndicator size="small" color="#6B7281" /> : <Text style={styles.verificationCancelText}>Resend Code</Text>}
-                                                    </TouchableOpacity>
-                                                )}
-
-                                                <TouchableOpacity
-                                                    style={styles.verificationCancelButton}
-                                                    onPress={() => {
-                                                        setVerificationStep('input');
-                                                        setVerificationError(null);
-                                                    }}
-                                                >
-                                                    <Text style={styles.verificationCancelText}>Back</Text>
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    style={styles.verificationSubmitButton}
-                                                    onPress={handleSubmitVerification}
-                                                    disabled={isVerifying}
-                                                >
-                                                    {isVerifying ? (
-                                                        <ActivityIndicator size="small" color="#fff" />
-                                                    ) : (
-                                                        <Text style={styles.verificationSubmitText}>Verify</Text>
-                                                    )}
-                                                </TouchableOpacity>
-                                            </View>
-                                        </>
+                                        <Text style={styles.avatarInitials}>
+                                            {(profileNameInput || "User").substring(0, 2).toUpperCase()}
+                                        </Text>
                                     )}
-
-                                    {verificationError ? (
-                                        <Text style={styles.errorText}>{verificationError}</Text>
-                                    ) : null}
                                 </View>
-                            )}
+                                <TouchableOpacity
+                                    style={styles.cameraBadge}
+                                    onPress={handlePickProfileImage}
+                                    disabled={isSavingProfile || isPickingProfileImage}
+                                >
+                                    {isPickingProfileImage ? (
+                                        <ActivityIndicator size="small" color="#555" />
+                                    ) : (
+                                        <Ionicons name="camera-outline" size={14} color="#555" />
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+
+                            <View style={styles.nameInputContainer}>
+                                <TextInput
+                                    style={styles.nameInput}
+                                    value={profileNameInput}
+                                    onChangeText={setProfileNameInput}
+                                    placeholder="Your Name"
+                                    placeholderTextColor="#A0A0A0"
+                                    onEndEditing={() => handleSaveProfile()}
+                                />
+                            </View>
                         </View>
 
-                        {/* Account Management */}
-                        <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Account Management</Text>
-                        <View style={styles.actionsList}>
+                        <View style={styles.bodyContent}>
+                            <Text style={styles.sectionTitle}>Account Details</Text>
+                            <View style={styles.detailsList}>
+                                <View style={styles.detailItem}>
+                                    <View style={styles.detailIconWrapper}>
+                                        <Ionicons name="phone-portrait-outline" size={24} color="#00154D" />
+                                    </View>
+                                    <View style={styles.detailTextWrapper}>
+                                        <View style={styles.detailRow}>
+                                            <Text style={styles.detailLabel}>Phone Number</Text>
+                                            {phone ? (
+                                                <Text style={[styles.statusBadge, { color: '#22C55E' }]}>Verified</Text>
+                                            ) : (
+                                                <TouchableOpacity onPress={() => handleStartVerification('phone')}>
+                                                    <Text style={[styles.statusBadge, { color: '#0052CC' }]}>Set</Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                        <Text style={styles.detailValue}>{phone || "Not set"}</Text>
+                                    </View>
+                                </View>
 
-                            <TouchableOpacity style={styles.actionLink} onPress={onPressLocationHistory}>
-                                <Text style={styles.actionLinkText}>View Location History</Text>
-                            </TouchableOpacity>
+                                <View style={styles.detailItem}>
+                                    <View style={styles.detailIconWrapper}>
+                                        <MaterialCommunityIcons name="email-outline" size={24} color="#00154D" />
+                                    </View>
+                                    <View style={styles.detailTextWrapper}>
+                                        <View style={styles.detailRow}>
+                                            <Text style={styles.detailLabel}>Email Address</Text>
+                                            {email ? (
+                                                <Text style={[styles.statusBadge, { color: '#22C55E' }]}>Verified</Text>
+                                            ) : (
+                                                <TouchableOpacity onPress={() => handleStartVerification('email')}>
+                                                    <Text style={[styles.statusBadge, { color: '#0052CC' }]}>Set</Text>
+                                                </TouchableOpacity>
+                                            )}
+                                        </View>
+                                        <Text style={styles.detailValue}>{email || "Not set"}</Text>
+                                    </View>
+                                    {!email && (
+                                        <TouchableOpacity style={styles.alertIconWrapper} onPress={() => handleStartVerification('email')}>
+                                            <Ionicons name="alert-circle" size={24} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            </View>
 
-                            {isCircleCreator ? (
-                                <TouchableOpacity style={styles.actionLink} onPress={onPressDeleteCircle} disabled={isDeletingCircle}>
-                                    {isDeletingCircle ? <ActivityIndicator color="#0052CC" /> : <Text style={styles.actionLinkText}>Delete Circle</Text>}
+                            <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Account Management</Text>
+                            <View style={styles.actionsList}>
+                                <TouchableOpacity style={[styles.actionLink, { marginTop: 16 }]} onPress={handleLogout}>
+                                    <Text style={styles.actionLinkText}>Log Out</Text>
                                 </TouchableOpacity>
-                            ) : (
-                                <TouchableOpacity style={styles.actionLink} onPress={onPressLeaveCircle} disabled={isLeavingCircle}>
-                                    {isLeavingCircle ? <ActivityIndicator color="#0052CC" /> : <Text style={styles.actionLinkText}>Leave Circle</Text>}
+
+                                <TouchableOpacity style={[styles.actionLink, { marginTop: 12 }]} onPress={handleDeleteAccount}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                        <Text style={[styles.actionLinkText, { color: COLORS.accent }]}>Delete Account</Text>
+                                    </View>
                                 </TouchableOpacity>
-                            )}
 
-                            <TouchableOpacity style={[styles.actionLink, { marginTop: 16 }]} onPress={onPressLogout}>
-                                <Text style={styles.actionLinkText}>Log Out</Text>
-                            </TouchableOpacity>
+                                {profileModalError ? (
+                                    <Text style={styles.errorText}>{profileModalError}</Text>
+                                ) : null}
 
-                            {profileModalError ? (
-                                <Text style={styles.errorText}>{profileModalError}</Text>
-                            ) : null}
-
-                            {isSavingProfile && (
-                                <Text style={styles.savingText}>Saving changes...</Text>
-                            )}
-
+                                {isSavingProfile && (
+                                    <Text style={styles.savingText}>Saving changes...</Text>
+                                )}
+                            </View>
                         </View>
-
-                    </View>
-
-                </ScrollView>
+                    </ScrollView>
+                )}
             </View>
+
+            {/* Verification Modal */}
+            <Modal
+                visible={verificationType !== null}
+                animationType="fade"
+                transparent={true}
+                onRequestClose={() => setVerificationType(null)}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.verificationModalContent}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>
+                                {verificationStep === 'input'
+                                    ? `Set ${verificationType === 'email' ? 'Email' : 'Phone'}`
+                                    : 'Verify Code'
+                                }
+                            </Text>
+                            <TouchableOpacity onPress={() => setVerificationType(null)}>
+                                <Ionicons name="close" size={24} color="#6B7280" />
+                            </TouchableOpacity>
+                        </View>
+
+                        {verificationStep === 'input' ? (
+                            <View style={styles.modalBody}>
+                                <Text style={styles.modalDescription}>
+                                    Enter your {verificationType === 'email' ? 'email address' : 'phone number'}. We'll send you a verification code.
+                                </Text>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    value={verificationInput}
+                                    onChangeText={setVerificationInput}
+                                    placeholder={verificationType === 'email' ? "email@example.com" : "+94771234567"}
+                                    keyboardType={verificationType === 'email' ? "email-address" : "phone-pad"}
+                                    autoCapitalize="none"
+                                />
+                                {verificationError && <Text style={styles.modalErrorText}>{verificationError}</Text>}
+                                <TouchableOpacity
+                                    style={[styles.modalButton, isVerifying && styles.modalButtonDisabled]}
+                                    onPress={handleSendVerificationCode}
+                                    disabled={isVerifying}
+                                >
+                                    {isVerifying ? (
+                                        <ActivityIndicator color="#fff" />
+                                    ) : (
+                                        <Text style={styles.modalButtonText}>Send Code</Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        ) : (
+                            <View style={styles.modalBody}>
+                                <Text style={styles.modalDescription}>
+                                    Enter the code sent to {verificationInput}
+                                </Text>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    value={otpInput}
+                                    onChangeText={setOtpInput}
+                                    placeholder="Enter 6-digit code"
+                                    keyboardType="number-pad"
+                                    maxLength={6}
+                                />
+                                {verificationError && <Text style={styles.modalErrorText}>{verificationError}</Text>}
+                                <TouchableOpacity
+                                    style={[styles.modalButton, isVerifying && styles.modalButtonDisabled]}
+                                    onPress={handleVerifyCode}
+                                    disabled={isVerifying}
+                                >
+                                    {isVerifying ? (
+                                        <ActivityIndicator color="#fff" />
+                                    ) : (
+                                        <Text style={styles.modalButtonText}>Verify & Save</Text>
+                                    )}
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.resendLink}
+                                    onPress={handleResendCode}
+                                    disabled={isResending}
+                                >
+                                    <Text style={styles.resendLinkText}>
+                                        {isResending ? 'Resending...' : 'Didn\'t receive code? Resend'}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.resendLink, { marginTop: 8 }]}
+                                    onPress={() => setVerificationStep('input')}
+                                >
+                                    <Text style={[styles.resendLinkText, { color: COLORS.gray }]}>
+                                        Change {verificationType === 'email' ? 'email' : 'phone'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                    </View>
+                </View>
+            </Modal>
         </Modal>
     );
 };
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: "#fff",
-    },
+    container: { flex: 1, backgroundColor: "#fff" },
     header: {
         flexDirection: "row",
         alignItems: "center",
+        justifyContent: "space-between",
         paddingHorizontal: 16,
         paddingVertical: 12,
-        backgroundColor: "#fff", // White top bar as per standard, or blue if user wants top bar blue too. Image implies standard nav bar.
+        backgroundColor: "#fff",
+        borderBottomWidth: 1,
+        borderBottomColor: "#f3f4f6",
     },
-    backButton: {
-        flexDirection: "row",
-        alignItems: "center",
-    },
-    backText: {
-        fontSize: 17,
-        color: "#0052CC",
-        marginLeft: 4,
-        fontWeight: '500',
-    },
-    content: {
-        paddingBottom: 40,
-    },
-    // Profile Header (Blue Section)
+    backButton: { flexDirection: "row", alignItems: "center" },
+    backText: { fontSize: 17, color: "#0052CC", marginLeft: 4, fontWeight: '500' },
+    headerTitle: { fontSize: 17, fontWeight: "600", color: "#111827" },
+    content: { paddingBottom: 40 },
     profileHeader: {
         backgroundColor: "#E6F0FF",
         paddingVertical: 24,
@@ -484,10 +578,7 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
     },
-    avatarContainer: {
-        position: 'relative',
-        marginRight: 16,
-    },
+    avatarContainer: { position: 'relative', marginRight: 16 },
     avatarWrapper: {
         width: 60,
         height: 60,
@@ -496,15 +587,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         overflow: 'hidden',
     },
-    avatarInitials: {
-        color: "#fff",
-        fontSize: 20,
-        fontWeight: "bold",
-    },
-    avatarImage: {
-        width: '100%',
-        height: '100%',
-    },
+    avatarInitials: { color: "#fff", fontSize: 20, fontWeight: "bold" },
+    avatarImage: { width: '100%', height: '100%' },
     cameraBadge: {
         position: 'absolute',
         bottom: -2,
@@ -518,30 +602,22 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         borderColor: '#E6F0FF',
     },
-    nameInputContainer: {
-        flex: 1,
-    },
+    nameInputContainer: { flex: 1 },
     nameInput: {
         fontSize: 18,
         fontWeight: '600',
         color: '#00154D',
         paddingVertical: 4,
     },
-    // Body
-    bodyContent: {
-        paddingHorizontal: 20,
-        paddingTop: 32,
-    },
+    bodyContent: { paddingHorizontal: 20, paddingTop: 32 },
     sectionTitle: {
         fontSize: 16,
         fontWeight: '500',
-        color: '#6B7281', // Gray-500
+        color: '#6B7281',
         marginBottom: 16,
         textTransform: 'uppercase',
     },
-    detailsList: {
-        marginBottom: 24,
-    },
+    detailsList: { marginBottom: 24 },
     detailItem: {
         flexDirection: "row",
         alignItems: "center",
@@ -558,111 +634,105 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginRight: 16,
     },
-    detailTextWrapper: {
-        flex: 1,
-        justifyContent: 'center',
-    },
+    detailTextWrapper: { flex: 1, justifyContent: 'center' },
     detailRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         marginBottom: 4,
     },
-    detailLabel: {
-        fontSize: 12,
-        color: '#6B7281',
-        fontWeight: '500',
+    detailLabel: { fontSize: 12, color: '#6B7281', fontWeight: '500' },
+    detailValue: { fontSize: 15, color: '#111827', fontWeight: '500' },
+    statusBadge: { fontSize: 12, fontWeight: '600' },
+    alertIconWrapper: { marginLeft: 12 },
+    actionsList: {},
+    actionLink: { paddingVertical: 12 },
+    actionLinkText: { fontSize: 16, color: '#0052CC', fontWeight: '500' },
+    errorText: { marginTop: 12, color: "#DC2626", fontSize: 14, textAlign: 'center' },
+    savingText: { textAlign: 'center', marginTop: 10, color: '#6B7280' },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
     },
-    detailValue: {
-        fontSize: 15,
-        color: '#111827',
-        fontWeight: '500',
+    verificationModalContent: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        width: '100%',
+        maxWidth: 400,
+        padding: 24,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+        elevation: 5,
     },
-    statusBadge: {
-        fontSize: 12,
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    modalTitle: {
+        fontSize: 18,
         fontWeight: '600',
+        color: '#111827',
     },
-    alertIconWrapper: {
-        marginLeft: 12,
+    modalBody: {
+        alignItems: 'center',
     },
-    // Verification Inline
-    verificationContainer: {
-        marginTop: 16,
-        padding: 16,
-        backgroundColor: '#F9FAFB',
-        borderRadius: 8,
+    modalDescription: {
+        fontSize: 14,
+        color: '#6B7280',
+        textAlign: 'center',
+        marginBottom: 20,
+        lineHeight: 20,
+    },
+    modalInput: {
+        width: '100%',
+        height: 50,
         borderWidth: 1,
         borderColor: '#E5E7EB',
+        borderRadius: 8,
+        paddingHorizontal: 16,
+        fontSize: 16,
+        color: '#111827',
+        marginBottom: 16,
+        textAlign: 'center',
     },
-    verificationTitle: {
+    modalErrorText: {
+        color: '#DC2626',
+        fontSize: 13,
+        marginBottom: 16,
+        textAlign: 'center',
+    },
+    modalButton: {
+        width: '100%',
+        height: 50,
+        backgroundColor: '#113C9C',
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    modalButtonDisabled: {
+        backgroundColor: '#9CA3AF',
+    },
+    modalButtonText: {
+        color: '#fff',
         fontSize: 16,
         fontWeight: '600',
-        color: '#111827',
-        marginBottom: 12,
     },
-    verificationSubtitle: {
+    resendLink: {
+        padding: 8,
+    },
+    resendLinkText: {
         fontSize: 14,
-        color: '#4B5563',
-        marginBottom: 12,
-    },
-    verificationInput: {
-        backgroundColor: '#fff',
-        borderWidth: 1,
-        borderColor: '#D1D5DB',
-        borderRadius: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        fontSize: 15,
-        color: '#111827',
-        marginBottom: 12,
-    },
-    verificationButtons: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 8,
-    },
-    verificationCancelButton: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-    },
-    verificationCancelText: {
-        color: '#6B7281',
-        fontWeight: '500',
-    },
-    verificationSubmitButton: {
-        backgroundColor: '#0052CC',
-        borderRadius: 6,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-    },
-    verificationSubmitText: {
-        color: '#fff',
-        fontWeight: '500',
-    },
-    // Action Links
-    actionsList: {
-        // paddingTop: 8
-    },
-    actionLink: {
-        paddingVertical: 12,
-    },
-    actionLinkText: {
-        fontSize: 16,
         color: '#0052CC',
         fontWeight: '500',
     },
-    errorText: {
-        marginTop: 12,
-        color: "#DC2626",
-        fontSize: 14,
-        textAlign: 'center',
-    },
-    savingText: {
-        textAlign: 'center',
-        marginTop: 10,
-        color: '#6B7280',
-    },
 });
-
 
 export default AccountModal;

@@ -6,7 +6,6 @@ import { router, useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   Dimensions,
   FlatList,
@@ -17,7 +16,6 @@ import {
   Modal,
   PanResponder,
   Platform,
-  Modal as RNModal,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -28,31 +26,35 @@ import {
 } from "react-native";
 import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { isBackgroundLocationRunning, startBackgroundLocation, stopBackgroundLocation } from "../../services/BackgroundLocationService";
+import { useAlert } from "../context/AlertContext";
 
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
 
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // --- Components & Utils ---
+import { BlurView } from "expo-blur";
 import * as ImagePicker from "expo-image-picker";
-import AddPlaceModal from "../../components/AddPlaceModal";
-import { API_BASE_URL, authenticatedFetch, logout, updateUserProfile } from "../../utils/auth";
+import { NotificationToast } from "../../components/NotificationToast";
+import { NotificationItem, NotificationService } from "../../services/NotificationService";
+import { API_BASE_URL, authenticatedFetch, logout, storeTokens, updateUserProfile } from "../../utils/auth";
 import {
   readBatteryLevel,
+  sendBatteryLevel,
   sendBatteryLevelValue,
   sendLowBatteryAlert,
   watchBatteryLevel
 } from "../../utils/battery";
+import { formatToSLTime } from "../../utils/dateHelpers";
 import { storeLastKnownLocation } from "../../utils/locationCache";
 import { setNotificationReceptionEnabled } from "../../utils/notificationListeners";
 import { requestNotificationPermissions } from "../../utils/permissions";
 import NotificationIcon from "../components/icons/NotificationIcon";
-import AccountModal from "../components/modals/AccountModal";
-import CircleManagementModal from "../components/modals/CircleManagementModal";
-import LocationSharingModal from "../components/modals/LocationSharingModal";
-import { NotificationsModal } from "../components/modals/NotificationsModal";
-import SettingsModal from "../components/modals/SettingsModal";
+import StartupLoading from "../components/StartupLoading";
+
+// --- Custom Modals ---
 
 import {
   AssignedLocationDetails,
@@ -66,7 +68,22 @@ import {
   MemberLocationOption,
   UserLocation,
 } from "../types/models";
-import CirclesModal from "./CirclesModal";
+// --- Custom Modals ---
+import AccountModal from "../components/modals/AccountModal";
+import AddPeopleModal from "../components/modals/AddPeopleModal";
+import AddPlaceModal from "../components/modals/AddPlaceModal";
+import CircleManagementModal from "../components/modals/CircleManagementModal";
+import CirclesModal from "../components/modals/CirclesModal";
+import DriveDetectionModal from "../components/modals/DriveDetectionModal";
+import EditCircleNameModal from "../components/modals/EditCircleNameModal";
+import LocationSharingModal from "../components/modals/LocationSharingModal";
+import MemberJourneysModal from "../components/modals/MemberJourneysModal";
+import NotificationsModal from "../components/modals/NotificationsModal";
+import SettingsModal from "../components/modals/SettingsModal";
+import SmartNotificationModal from "../components/modals/SmartNotificationModal";
+import SosModal from "../components/modals/SosModal";
+import { CreateCircleModal, JoinCircleModal } from "./CreateJoinModals";
+// --- Modal Components ---
 
 // --- Enums & Types for Circle Notifications ---
 export enum NotificationType {
@@ -109,7 +126,6 @@ function splitIntoJourneys(history: LocationHistoryEntry[]): LocationHistoryEntr
 }
 
 
-import { MemberJourneysModal } from "../components/modals/MemberJourneysModal";
 import { MAP_THEME_LIGHT } from "../constants/MapThemes";
 
 
@@ -120,7 +136,7 @@ const TOP_HEADER_HEIGHT = 60;
 const TAB_BAR_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 
-const MAX_HEIGHT = SCREEN_HEIGHT - TOP_HEADER_HEIGHT;
+const MAX_HEIGHT = SCREEN_HEIGHT * 0.75;
 const MIN_HEIGHT = TAB_BAR_HEIGHT + HANDLE_HEIGHT;
 const MID_HEIGHT = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) / 2;
 const INITIAL_SHEET_HEIGHT = MID_HEIGHT;
@@ -137,11 +153,11 @@ const COLORS = {
 
 const STORAGE_KEYS = {
   lastSelectedCircleId: "mapScreen:lastSelectedCircleId",
-  locationSharingEnabled: "mapScreen:settings:locationSharingEnabled",
-  notificationsEnabled: "mapScreen:settings:notificationsEnabled",
+  locationSharingEnabled: "user_location_sharing_enabled",
+  notificationsEnabled: "user_notifications_enabled",
 };
 
-// const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task"; // Removed
+const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task";
 const LAST_POSTED_LOCATION_STORAGE_KEY = "mapScreen:lastPostedPerCircle";
 const isNativePlatform = Platform.OS === "ios" || Platform.OS === "android";
 const CIRCLE_LOCATIONS_CACHE_KEY = "mapScreen:circleLocationsCache";
@@ -256,22 +272,24 @@ const asNonEmptyString = (value: unknown): string | null => {
 };
 
 const resolveMembershipLocationId = (member: CircleMember | null | undefined): string | null => {
-  const membership = member?.Membership as Record<string, unknown> | undefined;
-  if (!membership) {
-    return null;
-  }
+  if (!member) return null;
+  const membership = (member as any)?.Membership ?? {};
 
-  const candidates: unknown[] = [
+  const locIdCandidates = [
     membership.locationId,
     membership.LocationId,
     membership.location_id,
     membership.specialLocationId,
     membership.assignedLocationId,
-    (membership as any)?.location?.id,
+    (member as any).locationId,
+    (member as any).LocationId,
   ];
 
-  const resolved = candidates.find((candidate) => candidate !== undefined && candidate !== null);
-  return normalizeIdentifier(resolved ?? null);
+  for (const candidate of locIdCandidates) {
+    const normalized = normalizeIdentifier(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
 };
 
 const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -343,6 +361,53 @@ const setLastPostedLocationForCircle = async (
     timestamp: Date.now(),
   };
   await writeLastPostedLocationMap(map);
+};
+
+
+
+const handleCreateCircleAction = async (name: string): Promise<void> => {
+  const response = await authenticatedFetch(`${API_BASE_URL}/circles`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      name: name.trim(),
+      location: { latitude: 0, longitude: 0, name: "Default" },
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || "Failed to create circle");
+  }
+
+  // Refresh circles list or select new circle logic if needed
+  // This logic should ideally be passed down or handled here
+};
+
+const handleUpdateCircleNameAction = async (circleId: any, name: string): Promise<void> => {
+  const response = await authenticatedFetch(`${API_BASE_URL}/circles/${circleId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ name: name.trim() }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || "Failed to update circle name");
+  }
+};
+
+const handleJoinCircleAction = async (pin: string): Promise<void> => {
+  const response = await authenticatedFetch(`${API_BASE_URL}/circles/join-by-code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ code: pin.toUpperCase().trim() }),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "Invalid or expired code.");
+  }
 };
 
 const removeLastPostedLocationForCircle = async (circleId: string) => {
@@ -694,7 +759,7 @@ type PresenceSnapshot = Record<string, boolean>;
 interface PresenceTransitions {
   validIds: Set<string>;
   entered: CachedCircleLocation[];
-  exited: string[];
+  exited: CachedCircleLocation[];
 }
 
 const computePresenceTransitions = (
@@ -704,7 +769,7 @@ const computePresenceTransitions = (
 ): PresenceTransitions => {
   const validIds = new Set<string>();
   const entered: CachedCircleLocation[] = [];
-  const exited: string[] = [];
+  const exited: CachedCircleLocation[] = [];
 
   for (const location of locations) {
     validIds.add(location.id);
@@ -722,7 +787,7 @@ const computePresenceTransitions = (
     if (isInside && !previouslyInside) {
       entered.push(location);
     } else if (!isInside && previouslyInside) {
-      exited.push(location.id);
+      exited.push(location);
     }
   }
 
@@ -753,7 +818,15 @@ const notifyLocationEntries = async (
   const processed: CachedCircleLocation[] = [];
   for (const location of entered) {
     try {
-      await markCircleLocationReached(circleId, location.id, coords);
+      // Check metadata for arrival notification toggle
+      const notifyArrival = location.metadata?.notifyOnArrival !== false;
+
+      if (notifyArrival) {
+        await markCircleLocationReached(circleId, location.id, coords);
+      } else {
+        console.log(`Skipping arrival alert for ${location.name || location.id} (disabled in metadata)`);
+      }
+
       snapshot[location.id] = true;
       processed.push(location);
     } catch (error) {
@@ -765,14 +838,22 @@ const notifyLocationEntries = async (
 
 const notifyLocationExits = async (
   circleId: string,
-  exited: string[],
+  exited: CachedCircleLocation[],
   snapshot: PresenceSnapshot
 ): Promise<boolean> => {
   let changed = false;
-  for (const locationId of exited) {
+  for (const location of exited) {
     try {
-      await markCircleLocationLeft(circleId, locationId);
-      snapshot[locationId] = false;
+      // Check metadata for departure notification toggle
+      const notifyDeparture = location.metadata?.notifyOnDeparture !== false;
+
+      if (notifyDeparture) {
+        await markCircleLocationLeft(circleId, location.id);
+      } else {
+        console.log(`Skipping departure alert for ${location.name || location.id} (disabled in metadata)`);
+      }
+
+      snapshot[location.id] = false;
       changed = true;
     } catch (error) {
       console.warn("Failed to mark location left", error);
@@ -1930,110 +2011,8 @@ const resolveMemberId = (member: CircleMember | null | undefined) => {
   return null;
 };
 
-// Modal component for circle notification settings
-const CircleNotificationSettingsModal: React.FC<{
-  visible: boolean;
-  onClose: () => void;
-  loading: boolean;
-  settings: CircleNotificationSettings;
-  onSave: (newSettings: CircleNotificationSettings) => void;
-  insets: { top: number; bottom: number; left: number; right: number };
-}> = ({ visible, onClose, loading, settings, onSave, insets }) => {
-  const [localSettings, setLocalSettings] = useState<CircleNotificationSettings>(settings);
 
-  useEffect(() => {
-    setLocalSettings(settings);
-  }, [settings]);
 
-  const handleChange = (type: string, value: NotificationRecipientType) => {
-    setLocalSettings(prev => ({ ...prev, [type]: value }));
-  };
-
-  const notificationOptions = [
-    { label: "Location Reached", key: NotificationType.LOCATION_REACHED },
-    { label: "Location Left", key: NotificationType.LOCATION_LEFT },
-    { label: "SOS Alert", key: NotificationType.SOS_ALERT },
-    { label: "Low Battery", key: NotificationType.LOW_BATTERY },
-    { label: "Crash Detected", key: NotificationType.CRASH_DETECTED },
-    { label: "Invite", key: NotificationType.INVITE },
-    { label: "Membership Accepted", key: NotificationType.MEMBERSHIP_ACCEPTED },
-    { label: "Membership Rejected", key: NotificationType.MEMBERSHIP_REJECTED },
-    { label: "Member Removed", key: NotificationType.MEMBER_REMOVED },
-    { label: "Role Updated", key: NotificationType.ROLE_UPDATED },
-    { label: "Nickname Updated", key: NotificationType.NICKNAME_UPDATED },
-    { label: "Location Added", key: NotificationType.LOCATION_ADDED },
-    { label: "Location Removed", key: NotificationType.LOCATION_REMOVED },
-    { label: "Location Assigned", key: NotificationType.LOCATION_ASSIGNED },
-    { label: "Location Unassigned", key: NotificationType.LOCATION_UNASSIGNED },
-  ];
-
-  const recipientOptions = [
-    { label: "All Members", value: NotificationRecipientType.ALL_MEMBERS },
-    { label: "Admins Only", value: NotificationRecipientType.CREATOR_AND_ADMINS },
-    { label: "Triggering User", value: NotificationRecipientType.TRIGGERING_USER_ONLY },
-    { label: "None", value: NotificationRecipientType.NONE },
-  ];
-
-  return (
-    <RNModal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: COLORS.white, paddingTop: insets.top }}>
-        {/* Header */}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: COLORS.lightGray }}>
-          <Text style={{ fontSize: 18, fontWeight: '700', color: COLORS.black }}>Notification Settings</Text>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Ionicons name="close" size={24} color={COLORS.black} />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView contentContainerStyle={{ padding: 16 }}>
-          {notificationOptions.map(option => (
-            <View key={option.key} style={{ marginBottom: 20 }}>
-              <Text style={{ fontSize: 15, fontWeight: '600', color: COLORS.black, marginBottom: 8 }}>{option.label}</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                {recipientOptions.map(recipient => {
-                  const isSelected = localSettings[option.key] === recipient.value || (!localSettings[option.key] && recipient.value === NotificationRecipientType.CREATOR_AND_ADMINS);
-                  return (
-                    <TouchableOpacity
-                      key={recipient.value}
-                      style={{
-                        paddingVertical: 6,
-                        paddingHorizontal: 10,
-                        borderRadius: 20,
-                        borderWidth: 1,
-                        borderColor: isSelected ? COLORS.primary : COLORS.lightGray,
-                        backgroundColor: isSelected ? COLORS.primary : 'transparent',
-                        marginRight: 8,
-                        marginBottom: 8
-                      }}
-                      onPress={() => handleChange(option.key, recipient.value)}
-                    >
-                      <Text style={{
-                        color: isSelected ? COLORS.white : COLORS.gray,
-                        fontSize: 12,
-                        fontWeight: isSelected ? '600' : '500'
-                      }}>{recipient.label}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-              <View style={{ height: 1, backgroundColor: '#F3F4F6', marginTop: 8 }} />
-            </View>
-          ))}
-        </ScrollView>
-
-        <View style={{ padding: 16, borderTopWidth: 1, borderTopColor: COLORS.lightGray }}>
-          <TouchableOpacity
-            style={{ backgroundColor: COLORS.primary, padding: 16, borderRadius: 12, alignItems: 'center', opacity: loading ? 0.7 : 1 }}
-            onPress={() => onSave(localSettings)}
-            disabled={loading}
-          >
-            {loading ? <ActivityIndicator color={COLORS.white} /> : <Text style={{ color: COLORS.white, fontWeight: '700', fontSize: 16 }}>Save Changes</Text>}
-          </TouchableOpacity>
-        </View>
-      </View>
-    </RNModal>
-  );
-};
 
 // =======================================================
 // MAP SCREEN COMPONENT
@@ -2047,6 +2026,10 @@ const MapScreen: React.FC = () => {
   const locationRef = useRef<UserLocation | null>(null);
   const locationWatchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
 
+  // Startup Loading State
+  const [startupStatus, setStartupStatus] = useState<string | null>("Starting up...");
+  const [startupProgress, setStartupProgress] = useState(0);
+
   const [circles, setCircles] = useState<CircleData[]>([]);
   const circlesRef = useRef<CircleData[]>([]); // Ref to avoid stale closures in selection logic
 
@@ -2059,30 +2042,15 @@ const MapScreen: React.FC = () => {
   const [activeTab, setActiveTab] = useState("Location");
 
   const [mapLayerStyle, setMapLayerStyle] = useState<MapType>('standard');
-  const [isMapStyleModalOpen, setIsMapStyleModalOpen] = useState(false);
-
   const mapRef = useRef<MapView | null>(null);
   const locationHistoryMapRef = useRef<MapView | null>(null);
-  const [isCirclesModalOpen, setIsCirclesModalOpen] = useState(false);
-  const [isAddPlaceModalOpen, setIsAddPlaceModalOpen] = useState(false);
-  const [placeModalMode, setPlaceModalMode] = useState<"create" | "edit">("create");
-  const [locationBeingEdited, setLocationBeingEdited] = useState<LocationPoint | null>(null);
-  const [shareTargetCircle, setShareTargetCircle] = useState<CircleData | null>(null);
-  const [shareRequestId, setShareRequestId] = useState(0);
   const insets = useSafeAreaInsets();
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserAvatarUrl, setCurrentUserAvatarUrl] = useState<string | null>(null);
   const [currentUserBatteryLevel, setCurrentUserBatteryLevel] = useState<BatteryLevelInfo | null>(null);
-  const [editMemberModalVisible, setEditMemberModalVisible] = useState(false);
-  const [memberBeingEdited, setMemberBeingEdited] = useState<CircleMember | null>(null);
-  const [editedMemberRole, setEditedMemberRole] = useState<string>("member");
-  const [editedMemberNickname, setEditedMemberNickname] = useState<string>("");
-  const [isSavingMemberChanges, setIsSavingMemberChanges] = useState(false);
-  const [memberModalError, setMemberModalError] = useState<string | null>(null);
-  const [selectedMemberLocationId, setSelectedMemberLocationId] = useState<string | null>(null);
   const [memberRemovalLoadingId, setMemberRemovalLoadingId] = useState<string | null>(null);
-  const [accountActionsVisible, setAccountActionsVisible] = useState(false);
-  const [isNotificationsModalVisible, setIsNotificationsModalVisible] = useState(false); // New State
+  const [toastNotification, setToastNotification] = useState<NotificationItem | null>(null);
+  const lastSeenNotificationIdRef = useRef<string | null>(null);
   const [isLeavingCircle, setIsLeavingCircle] = useState(false);
   const [isDeletingCircle, setIsDeletingCircle] = useState(false);
   const [assignedLocationsByCircle, setAssignedLocationsByCircle] = useState<Record<string, AssignedLocationRecord>>({});
@@ -2091,8 +2059,7 @@ const MapScreen: React.FC = () => {
   const lastAssignedFetchTimestampRef = useRef(0);
   const fetchCircleMembersInFlightRef = useRef(new Set<string>());
   const memberFetchTimestampsRef = useRef<Record<string, number>>({});
-
-  // Removed isProfileModalVisible
+  const { showAlert } = useAlert();
   const [activeSection, setActiveSection] = useState<'members' | 'place' | 'key'>('members');
   const [selectedDrivingMemberId, setSelectedDrivingMemberId] = useState<string | "all">("all");
   const [profileNameInput, setProfileNameInput] = useState("");
@@ -2104,33 +2071,77 @@ const MapScreen: React.FC = () => {
   const [profileModalError, setProfileModalError] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSendingSos, setIsSendingSos] = useState(false);
-  const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+  const [isCirclesModalOpen, setIsCirclesModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
+  const [isDriveDetectionModalOpen, setIsDriveDetectionModalOpen] = useState(false);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [isLocationSharingModalOpen, setIsLocationSharingModalOpen] = useState(false);
+  const [isCircleManagementModalOpen, setIsCircleManagementModalOpen] = useState(false);
+  const [isSosModalOpen, setIsSosModalOpen] = useState(false);
+  const [isAddPeopleModalOpen, setIsAddPeopleModalOpen] = useState(false);
+  const [isSmartNotificationModalOpen, setIsSmartNotificationModalOpen] = useState(false);
+
+  // Add Place Modal State
+  const [isAddPlaceModalOpen, setIsAddPlaceModalOpen] = useState(false);
+  const [addPlaceMode, setAddPlaceMode] = useState<'create' | 'edit'>('create');
+  const [editingLocation, setEditingLocation] = useState<LocationPoint | null>(null);
+
+  // Member Journeys Modal State
+  const [isMemberJourneysModalOpen, setIsMemberJourneysModalOpen] = useState(false);
+  const [selectedMemberForJourneys, setSelectedMemberForJourneys] = useState<string | number | undefined>(undefined);
+
+  // Circles Modal Share State
+
+
+  // Existing state...
   const [locationSharingEnabled, setLocationSharingEnabled] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [isUpdatingLocationSharing, setIsUpdatingLocationSharing] = useState(false);
   const [isUpdatingNotifications, setIsUpdatingNotifications] = useState(false);
-  const [isLocationHistoryModalVisible, setIsLocationHistoryModalVisible] = useState(false);
   const [locationHistoryLoading, setLocationHistoryLoading] = useState(false);
   const [locationHistory, setLocationHistory] = useState<LocationHistoryEntry[]>([]);
   const [locationHistoryError, setLocationHistoryError] = useState<string | null>(null);
   const [locationHistoryActiveFilter, setLocationHistoryActiveFilter] = useState<LocationHistoryFilterKey>("today");
   const [locationHistoryCustomStart, setLocationHistoryCustomStart] = useState("");
   const [locationHistoryCustomEnd, setLocationHistoryCustomEnd] = useState("");
+  const [showLocationHistoryCustomStartPicker, setShowLocationHistoryCustomStartPicker] = useState(false);
+  const [showLocationHistoryCustomEndPicker, setShowLocationHistoryCustomEndPicker] = useState(false);
   const [shouldRenderLocationHistoryMap, setShouldRenderLocationHistoryMap] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [selectedMemberLocationId, setSelectedMemberLocationId] = useState<string | null>(null);
+  const [isEditMemberModalOpen, setIsEditMemberModalOpen] = useState(false);
+  const [memberBeingEdited, setMemberBeingEdited] = useState<CircleMember | null>(null);
+  const [editedMemberRole, setEditedMemberRole] = useState("member");
+  const [editedMemberNickname, setEditedMemberNickname] = useState("");
+  const [isSavingMemberChanges, setIsSavingMemberChanges] = useState(false);
+  const [memberModalError, setMemberModalError] = useState<string | null>(null);
+  const [isMapStyleModalOpen, setIsMapStyleModalOpen] = useState(false);
+  const [isCirclesSelectionModalOpen, setIsCirclesSelectionModalOpen] = useState(false);
+  const [isLocationHistoryModalVisible, setIsLocationHistoryModalVisible] = useState(false);
+  const [iscirclesSelectionOpenAtShare, setCirclesSelectionOpenAtShare] = useState(false);
+  const [isCreateCircleModalOpen, setIsCreateCircleModalOpen] = useState(false);
+  const [isJoinCircleModalOpen, setIsJoinCircleModalOpen] = useState(false);
+  const [isEditCircleNameModalOpen, setIsEditCircleNameModalOpen] = useState(false);
 
-  // State for new journeys modal
-  const [selectedJourneyMember, setSelectedJourneyMember] = useState<CircleMember | null>(null);
 
-  // Circle Notification Settings
-  const [isCircleNotificationSettingsModalVisible, setIsCircleNotificationSettingsModalVisible] = useState(false);
-
-  const [currentNotificationSettings, setCurrentNotificationSettings] = useState<CircleNotificationSettings>({});
-  const [isSavingCircleNotificationSettings, setIsSavingCircleNotificationSettings] = useState(false);
-  const [isAccountModalVisible, setIsAccountModalVisible] = useState(false);
 
   // Stored User Data (from Auth)
   const [storedUser, setStoredUser] = useState<any>(null);
+
+  const handleCustomStartChange = (event: any, selectedDate?: Date) => {
+    setShowLocationHistoryCustomStartPicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setLocationHistoryCustomStart(selectedDate.toISOString().split('T')[0]);
+    }
+  };
+
+  const handleCustomEndChange = (event: any, selectedDate?: Date) => {
+    setShowLocationHistoryCustomEndPicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      setLocationHistoryCustomEnd(selectedDate.toISOString().split('T')[0]);
+    }
+  };
 
   useEffect(() => {
     const loadStoredUser = async () => {
@@ -2146,9 +2157,11 @@ const MapScreen: React.FC = () => {
     loadStoredUser();
   }, []);
 
+
+
   // --- Journeys Modal State ---
-  const [isMemberJourneysModalVisible, setIsMemberJourneysModalVisible] = useState(false);
-  const [memberJourneysData, setMemberJourneysData] = useState<CircleMember | null>(null);
+  // const [isMemberJourneysModalVisible, setIsMemberJourneysModalVisible] = useState(false);
+  // const [memberJourneysData, setMemberJourneysData] = useState<CircleMember | null>(null);
 
   // --- Derived State (Moved up) ---
   const circleCreatorId = useMemo(() => {
@@ -2182,44 +2195,19 @@ const MapScreen: React.FC = () => {
     return isCircleCreator || currentMembershipRole === "admin";
   }, [currentMembershipRole, isCircleCreator]);
 
-  const handleOpenAccountModal = useCallback(() => {
-    // setIsSettingsModalVisible(false); // Kept open by request
-
-    // Populate profile data
-    const defaultName = currentMembership?.name ?? "";
-    let defaultMetadata = "";
-    const membershipMetadata = currentMembership?.Membership?.metadata;
-    if (typeof membershipMetadata === "string") {
-      defaultMetadata = membershipMetadata;
-    } else if (membershipMetadata && typeof membershipMetadata === "object") {
-      try {
-        defaultMetadata = JSON.stringify(membershipMetadata, null, 2);
-      } catch {
-        defaultMetadata = "";
-      }
-    }
-
-    setProfileNameInput(defaultName);
-    setProfileMetadataInput(defaultMetadata);
-    const existingAvatar =
-      extractAvatarUrl(currentMembership) ??
-      (typeof currentUserAvatarUrl === "string" ? currentUserAvatarUrl : null) ??
-      profileAvatarOriginal ??
-      null;
-    setProfileAvatarOriginal(existingAvatar);
-    setProfileAvatarPreview(existingAvatar);
-    setProfileAvatarUpload(null);
-    setProfileModalError(null);
-
-    setIsAccountModalVisible(true);
-  }, [currentMembership, currentUserAvatarUrl, profileAvatarOriginal]);
-
-  const handleCloseAccountModal = useCallback(() => {
-    setIsAccountModalVisible(false);
-    setIsSettingsModalVisible(true); // Re-open settings when closing account (optional, based on "Back" flow)
+  const handleOpenNotificationsModal = useCallback(() => {
+    setIsNotificationsModalOpen(true);
   }, []);
 
-  const handleOpenCircleNotificationSettings = () => {
+  const handleOpenAccountModal = useCallback(() => {
+    setIsAccountModalOpen(true);
+  }, []);
+
+  const handleOpenSmartNotificationsModal = useCallback(() => {
+    setIsSmartNotificationModalOpen(true);
+  }, []);
+
+  const handleOpenCircleNotificationSettings = useCallback(() => {
     if (!selectedCircle) return;
 
     // Permission check: Creator or Admin
@@ -2229,51 +2217,14 @@ const MapScreen: React.FC = () => {
     const isAdmin = role === "admin";
 
     if (!isCreator && !isAdmin) {
-      Alert.alert("Permission Denied", "Only circle creators and admins can update notification settings.");
+      showAlert({ title: "Permission Denied", message: "Only circle creators and admins can update notification settings.", type: 'warning' });
       return;
     }
 
     // Load settings from circle data
     const settings = (selectedCircle as any).notificationSettings || {};
-    setCurrentNotificationSettings(settings);
-    setIsCircleNotificationSettingsModalVisible(true);
-  };
-
-  const handleSaveCircleNotificationSettings = async (newSettings: CircleNotificationSettings) => {
-    if (!selectedCircle) return;
-    setIsSavingCircleNotificationSettings(true);
-    try {
-      const response = await authenticatedFetch(`${API_BASE_URL}/circles/${selectedCircle.id}/notification-settings`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify({ notificationSettings: newSettings }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload?.message ?? "Failed to update notification settings.");
-      }
-
-      // Update local state by merging new settings
-      // We do a shallow merge so we don't lose other circle props
-      const updatedCircle = { ...selectedCircle, notificationSettings: newSettings };
-      setSelectedCircle(updatedCircle);
-      setCircles(prev => prev.map(c => c.id === updatedCircle.id ? updatedCircle : c));
-
-      Alert.alert("Success", "Notification settings updated.");
-      setIsCircleNotificationSettingsModalVisible(false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to update settings.";
-      Alert.alert("Error", message);
-    } finally {
-      setIsSavingCircleNotificationSettings(false);
-    }
-  };
-
-
+    router.push({ pathname: '/screens/CircleNotificationSettingsScreen', params: { circleId: selectedCircle.id, initialSettings: JSON.stringify(settings) } } as any);
+  }, [currentUserId, selectedCircle, selectedCircleMembers, showAlert]);
 
 
 
@@ -2311,44 +2262,29 @@ const MapScreen: React.FC = () => {
   }, []);
 
   const handleOpenSettingsModal = useCallback(() => {
-    setIsSettingsModalVisible(true);
+    setIsSettingsModalOpen(true);
   }, []);
-
-  const handleCloseSettingsModal = useCallback(() => {
-    setIsSettingsModalVisible(false);
-  }, []);
-
-  // --- Location Sharing Modal ---
-  const [isLocationSharingModalVisible, setIsLocationSharingModalVisible] = useState(false);
 
   const handleOpenLocationSharingModal = useCallback(() => {
-    setIsLocationSharingModalVisible(true);
+    setIsLocationSharingModalOpen(true);
   }, []);
-
-  const handleCloseLocationSharingModal = useCallback(() => {
-    setIsLocationSharingModalVisible(false);
-  }, []);
-
-  // --- Circle Management Modal ---
-  const [isCircleManagementModalVisible, setIsCircleManagementModalVisible] = useState(false);
 
   const handleOpenCircleManagementModal = useCallback(() => {
-    setIsCircleManagementModalVisible(true);
+    setIsCircleManagementModalOpen(true);
   }, []);
 
-  const handleCloseCircleManagementModal = useCallback(() => {
-    setIsCircleManagementModalVisible(false);
+  const handleOpenCreateCircleModal = useCallback(() => {
+    setIsSettingsModalOpen(false);
+    setIsCreateCircleModalOpen(true);
   }, []);
 
   const handleOpenAddPeopleModal = useCallback(() => {
     if (!selectedCircle) {
-      Alert.alert("Error", "No circle selected.");
+      showAlert({ title: "Error", message: "No circle selected.", type: 'error' });
       return;
     }
-    setShareTargetCircle(selectedCircle);
-    setShareRequestId(Date.now());
-    setIsCirclesModalOpen(true);
-  }, [selectedCircle]);
+    setIsAddPeopleModalOpen(true);
+  }, [selectedCircle, showAlert]);
 
   const handleToggleLocationSharing = useCallback(async (nextValue: boolean) => {
     if (isUpdatingLocationSharing || nextValue === locationSharingEnabled) {
@@ -2361,10 +2297,11 @@ const MapScreen: React.FC = () => {
       if (nextValue) {
         const permission = await Location.requestForegroundPermissionsAsync();
         if (permission.status !== "granted") {
-          Alert.alert(
-            "Permission needed",
-            "Allow location access in your device settings to share your location with the circle."
-          );
+          showAlert({
+            title: "Permission needed",
+            message: "Allow location access in your device settings to share your location with the circle.",
+            type: 'warning'
+          });
           return;
         }
 
@@ -2372,10 +2309,11 @@ const MapScreen: React.FC = () => {
           try {
             const backgroundPermission = await Location.requestBackgroundPermissionsAsync();
             if (backgroundPermission.status !== "granted") {
-              Alert.alert(
-                "Background access limited",
-                "We'll share your location while the app is open. Enable background access in system settings for continuous updates."
-              );
+              showAlert({
+                title: "Background access limited",
+                message: "We'll share your location while the app is open. Enable background access in system settings for continuous updates.",
+                type: 'info'
+              });
             }
           } catch (backgroundError) {
             console.warn("Failed to request background location permission", backgroundError);
@@ -2411,7 +2349,7 @@ const MapScreen: React.FC = () => {
             });
           } catch (startError) {
             console.warn("Failed to start background location updates", startError);
-            Alert.alert("Background Error", "Could not start background location tracking.");
+            showAlert({ title: "Background Error", message: "Could not start background location tracking.", type: 'error' });
           }
         }
       } else if (isNativePlatform) {
@@ -2449,14 +2387,15 @@ const MapScreen: React.FC = () => {
       }
     } catch (error) {
       console.warn("Failed to update location sharing preference", error);
-      Alert.alert(
-        "Location sharing",
-        "We couldn't update your location sharing preference. Please try again."
-      );
+      showAlert({
+        title: "Location sharing",
+        message: "We couldn't update your location sharing preference. Please try again.",
+        type: 'error'
+      });
     } finally {
       setIsUpdatingLocationSharing(false);
     }
-  }, [isUpdatingLocationSharing, locationSharingEnabled, selectedCircle]);
+  }, [isUpdatingLocationSharing, locationSharingEnabled, selectedCircle, showAlert]);
 
   const handleToggleNotifications = useCallback(async (nextValue: boolean) => {
     if (isUpdatingNotifications || nextValue === notificationsEnabled) {
@@ -2469,10 +2408,11 @@ const MapScreen: React.FC = () => {
       if (nextValue) {
         const granted = await requestNotificationPermissions();
         if (!granted) {
-          Alert.alert(
-            "Permission needed",
-            "Enable notifications in your device settings to receive circle alerts."
-          );
+          showAlert({
+            title: "Permission needed",
+            message: "Enable notifications in your device settings to receive circle alerts.",
+            type: 'warning'
+          });
           return;
         }
       }
@@ -2486,14 +2426,15 @@ const MapScreen: React.FC = () => {
       ).catch(() => undefined);
     } catch (error) {
       console.warn("Failed to update notification preference", error);
-      Alert.alert(
-        "Notifications",
-        "We couldn't update your notification preference. Please try again."
-      );
+      showAlert({
+        title: "Notifications",
+        message: "We couldn't update your notification preference. Please try again.",
+        type: 'error'
+      });
     } finally {
       setIsUpdatingNotifications(false);
     }
-  }, [isUpdatingNotifications, notificationsEnabled]);
+  }, [isUpdatingNotifications, notificationsEnabled, showAlert]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2599,6 +2540,29 @@ const MapScreen: React.FC = () => {
   const sheetHeight = useRef(new Animated.Value(INITIAL_SHEET_HEIGHT)).current;
   const [isExpanded, setIsExpanded] = useState(INITIAL_SHEET_HEIGHT > MID_HEIGHT);
   const dragStartHeightRef = useRef(INITIAL_SHEET_HEIGHT);
+
+  // Poll for notifications
+  useEffect(() => {
+    let interval: any;
+    const pollNotifications = async () => {
+      try {
+        const response = await NotificationService.fetchNotifications(1, 1);
+        const latest = response.notifications[0];
+        // Only show toast if it's a new, unread notification and newer than what we've seen
+        if (latest && !latest.read && latest.id !== lastSeenNotificationIdRef.current) {
+          lastSeenNotificationIdRef.current = latest.id;
+          setToastNotification(latest);
+        }
+      } catch (e) {
+        // ignore error during poll
+      }
+    };
+
+    // Initial fetch
+    pollNotifications();
+    interval = setInterval(pollNotifications, 15000); // Poll every 15s
+    return () => clearInterval(interval);
+  }, []);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -2856,8 +2820,8 @@ const MapScreen: React.FC = () => {
       // This fixes an issue where the initial list might lack current locations
       fetchCircleMembers(found.id);
 
-      setIsCirclesModalOpen(false);
       await AsyncStorage.setItem(STORAGE_KEYS.lastSelectedCircleId, String(found.id)).catch(() => undefined);
+
 
       // Fit Map to Circle Content
       if (normalizedLocations.length > 0 && mapRef.current) {
@@ -2923,6 +2887,13 @@ const MapScreen: React.FC = () => {
           ? String(userIdCandidate)
           : currentUserId;
 
+      if (userPayload) {
+        // Update storedUser to keep local state in sync with backend truth
+        const mergedUser = { ...storedUser, ...userPayload };
+        setStoredUser(mergedUser);
+        await AsyncStorage.setItem("user", JSON.stringify(mergedUser)).catch(() => undefined);
+      }
+
       if (normalizedUserId && normalizedUserId !== currentUserId) {
         setCurrentUserId(normalizedUserId);
       }
@@ -2974,7 +2945,7 @@ const MapScreen: React.FC = () => {
     } catch (error) {
       console.error("Failed to fetch current user profile", error);
     }
-  }, [currentUserId]);
+  }, [currentUserId, storedUser]);
 
   const loadAssignedLocations = useCallback(async (force: boolean = false) => {
     if (loadingAssignedLocationsRef.current) {
@@ -3000,7 +2971,7 @@ const MapScreen: React.FC = () => {
       if (response.status === 401) {
         console.log("Assigned locations request unauthorized - redirecting to login");
         await logout();
-        router.replace("/screens/LogInScreen");
+        router.replace("/screens/LogInScreen" as any);
         return;
       }
 
@@ -3065,7 +3036,7 @@ const MapScreen: React.FC = () => {
         loadingCirclesRef.current = false;
         setLoadingCircles(false);
         await logout();
-        return router.replace("/screens/LogInScreen");
+        return router.replace("/screens/LogInScreen" as any);
       }
 
       if (!res.ok) {
@@ -3118,13 +3089,13 @@ const MapScreen: React.FC = () => {
       }
     } catch (e) {
       console.error("Network or Logic Error in loadCircles:", e);
-      Alert.alert("Connection Error", "Please check your internet connection.");
+      showAlert({ title: "Connection Error", message: "Please check your internet connection.", type: 'error' });
     } finally {
       loadingCirclesRef.current = false;
       setLoadingCircles(false);
       lastCircleFetchTimestampRef.current = Date.now();
     }
-  }, [selectCircle]);
+  }, [selectCircle, showAlert]);
 
   const requestCirclesRefresh = useCallback(() => {
     void loadCircles(true);
@@ -3159,6 +3130,8 @@ const MapScreen: React.FC = () => {
       const result = await updateUserProfile({
         name: profileNameInput.trim(),
         metadata,
+        email: storedUser?.email,
+        phoneNumber: storedUser?.phoneNumber,
         profileImage: profileAvatarUpload ? {
           uri: profileAvatarUpload.uri,
           name: profileAvatarUpload.name,
@@ -3220,7 +3193,7 @@ const MapScreen: React.FC = () => {
   }, [circles]);
 
   useEffect(() => {
-    if (!currentUserId || !currentUserAvatarUrl) {
+    if (!currentUserId) {
       return;
     }
 
@@ -3228,21 +3201,33 @@ const MapScreen: React.FC = () => {
       let changed = false;
       const updated = prevMembers.map((member) => {
         if (resolveMemberId(member) === currentUserId) {
-          if (member.avatar === currentUserAvatarUrl) {
-            return member;
+          const storedName = (storedUser as any)?.name;
+          const currentAvatar = currentUserAvatarUrl;
+
+          let memberUpdated = false;
+          const updatedMember = { ...member };
+
+          if (storedName && member.name !== storedName) {
+            updatedMember.name = storedName;
+            memberUpdated = true;
           }
-          changed = true;
-          return {
-            ...member,
-            avatar: currentUserAvatarUrl,
-          };
+
+          if (currentAvatar && member.avatar !== currentAvatar) {
+            updatedMember.avatar = currentAvatar;
+            memberUpdated = true;
+          }
+
+          if (memberUpdated) {
+            changed = true;
+            return updatedMember;
+          }
         }
         return member;
       });
 
       return changed ? updated : prevMembers;
     });
-  }, [currentUserAvatarUrl, currentUserId]);
+  }, [currentUserAvatarUrl, currentUserId, storedUser]);
 
   useEffect(() => {
     if (!currentUserId || !currentUserAvatarUrl) {
@@ -3261,45 +3246,124 @@ const MapScreen: React.FC = () => {
     fetchCurrentUserProfile();
   }, [fetchCurrentUserProfile]);
 
-  // 2. Initial Data Load (Location + Circles)
+  // 2. Initial Data Load (Location + Circles) - Optimized startup
   useEffect(() => {
-    const loadData = async () => {
+    const runStartupSequence = async () => {
       try {
+        setStartupStatus("Starting up...");
+        setStartupProgress(0.05);
+
+        // Step 1: Permissions
+        setStartupStatus("Checking permissions...");
         const { status } = await Location.requestForegroundPermissionsAsync();
+        setStartupProgress(0.15);
+
         if (status === "granted") {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setLocation({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            heading: pos.coords.heading || 0,
-            accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy ?? null : null,
-          });
+          try {
+            setStartupStatus("Getting location...");
+            const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            setLocation({
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              heading: pos.coords.heading || 0,
+              accuracy: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy ?? null : null,
+            });
+            setStartupProgress(0.3);
+          } catch (e) {
+            console.warn("Failed to get initial location during startup", e);
+          }
+        } else {
+          setStartupProgress(0.3);
         }
-        // Load circles regardless of location success
-        await loadCircles();
-        await loadAssignedLocations();
+
+        // Step 2: Parallel data fetching with granular progress
+        setStartupStatus("Loading your data...");
+
+        // Helper to wrap promise and update progress
+        async function wrapProgress<T>(promise: Promise<T>, increment: number): Promise<T> {
+          const result = await promise;
+          setStartupProgress(prev => Math.min(0.95, prev + increment));
+          return result;
+        }
+
+        await Promise.all([
+          wrapProgress(sendBatteryLevel().catch(e => console.warn("Failed to sync battery", e)), 0.15),
+          wrapProgress(fetchCurrentUserProfile().catch(e => console.warn("Failed to fetch profile", e)), 0.15),
+          wrapProgress(loadCircles().catch(e => console.warn("Failed to load circles", e)), 0.2),
+          wrapProgress(loadAssignedLocations().catch(e => console.warn("Failed to load assignments", e)), 0.15)
+        ]);
+
+        setStartupStatus("Ready");
+        setStartupProgress(1.0);
+        // Small delay to show completion
+        await new Promise(resolve => setTimeout(resolve, 300));
       } catch (e) {
-        console.warn("Location permission or load error:", e);
-        await loadCircles();
-        await loadAssignedLocations();
+        console.warn("Startup sequence error:", e);
+        // Fallback: critical data only
+        await loadCircles().catch(() => { });
+        setStartupProgress(1.0);
       } finally {
         setLoading(false);
+        setStartupStatus(null); // Finish loading
       }
     };
-    loadData();
+
+    runStartupSequence();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once
+  }, []); // Run once on mount
 
   // 3. Focus Effect (Refresh when screen comes into focus)
   useFocusEffect(
     useCallback(() => {
+      const refreshSettings = async () => {
+        try {
+          const [storedLocationSharing, storedNotifications] = await Promise.all([
+            AsyncStorage.getItem(STORAGE_KEYS.locationSharingEnabled),
+            AsyncStorage.getItem(STORAGE_KEYS.notificationsEnabled),
+          ]);
+
+          const initialLocationSharing = parseBooleanPreference(storedLocationSharing, true);
+          const initialNotifications = parseBooleanPreference(storedNotifications, true);
+
+          setLocationSharingEnabled(initialLocationSharing);
+          setNotificationsEnabled(initialNotifications);
+
+          // Apply notification reception state
+          await setNotificationReceptionEnabled(initialNotifications);
+        } catch (e) {
+          console.warn("Failed to refresh settings on focus", e);
+        }
+      };
+
       if (!loading) {
         loadCircles();
         loadAssignedLocations();
+        refreshSettings();
       }
     }, [loading, loadCircles, loadAssignedLocations]) // Safe dependencies
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      const checkSelectedCircle = async () => {
+        try {
+          const storedId = await AsyncStorage.getItem(STORAGE_KEYS.lastSelectedCircleId);
+          if (storedId && circlesRef.current.length > 0) {
+            const found = circlesRef.current.find(c => String(c.id) === storedId);
+            if (found && String(found.id) !== String(selectedCircleRef.current?.id)) {
+              selectCircle(found.id);
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to sync selected circle", e);
+        }
+        // Refresh circles list whenever we focus, to pick up new circles or name changes
+        loadCircles(true);
+      };
+
+      checkSelectedCircle();
+    }, [loadCircles, selectCircle])
+  );
   useEffect(() => {
     const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
@@ -3432,12 +3496,7 @@ const MapScreen: React.FC = () => {
     }
   }, [selectedCircle, fetchCircleMembers]);
 
-  // 5. Close modals on specific state changes
-  useEffect(() => {
-    if (!selectedCircle && isAddPlaceModalOpen) {
-      setIsAddPlaceModalOpen(false);
-    }
-  }, [isAddPlaceModalOpen, selectedCircle]);
+
 
   useEffect(() => {
     if (!isNativePlatform) {
@@ -3629,9 +3688,12 @@ const MapScreen: React.FC = () => {
         ? `You arrived at your assigned place${label ? `: ${label}` : ""}. We're notifying everyone in the circle.`
         : `You arrived at ${label}. We're notifying everyone in the circle.`;
 
-      Alert.alert(title, message);
+      console.log({ title, message, type: 'info' });
+
+
+      // showAlert({ title, message, type: 'info' });
     });
-  }, [currentUserAssignedLocationId, notificationsEnabled]);
+  }, [currentUserAssignedLocationId, notificationsEnabled, showAlert]);
 
   useEffect(() => {
     if (!locationSharingEnabled || !selectedCircle || !location) {
@@ -3966,7 +4028,7 @@ const MapScreen: React.FC = () => {
     if (Number.isNaN(date.getTime())) {
       return null;
     }
-    return date.toLocaleString();
+    return formatToSLTime(date);
   }, [currentUserBatteryLevel]);
 
   useEffect(() => {
@@ -3985,7 +4047,7 @@ const MapScreen: React.FC = () => {
   }, [isLocationHistoryModalVisible]);
 
   useEffect(() => {
-    if (!isLocationHistoryModalVisible || !shouldRenderLocationHistoryMap) {
+    if (!shouldRenderLocationHistoryMap) { // Changed from isLocationHistoryModalVisible
       return;
     }
     if (locationHistoryPolylineCoordinates.length < 2) {
@@ -4013,7 +4075,7 @@ const MapScreen: React.FC = () => {
     return () => {
       clearTimeout(timer);
     };
-  }, [isLocationHistoryModalVisible, locationHistoryPolylineCoordinates, shouldRenderLocationHistoryMap]);
+  }, [shouldRenderLocationHistoryMap, locationHistoryPolylineCoordinates]); // Changed from isLocationHistoryModalVisible
 
   const canEditMemberRole = useCallback(
     (member: CircleMember) => {
@@ -4023,13 +4085,14 @@ const MapScreen: React.FC = () => {
       const memberRole = normalizeRole(member.Membership?.role);
 
       if (isCircleCreator) {
-        return memberRole !== "creator" || memberId === currentUserId;
+        // creator can change and edit admins and members
+        return memberRole === "admin" || memberRole === "member";
       }
 
       if (currentMembershipRole === "admin") {
+        // Admins can change creator and Members Details
         if (memberId === currentUserId) return false;
-        if (memberRole === "creator" || memberRole === "admin") return false;
-        return true;
+        return memberRole === "creator" || memberRole === "member";
       }
 
       return false;
@@ -4045,17 +4108,18 @@ const MapScreen: React.FC = () => {
       const memberRole = normalizeRole(member.Membership?.role);
 
       if (isCircleCreator) {
-        return true;
+        // creator can change and edit admins and members
+        return memberRole === "admin" || memberRole === "member" || memberId === currentUserId;
       }
 
       if (currentMembershipRole === "admin") {
-        if (memberRole === "creator") return false;
-        return true;
+        // Admins can change creator and Members Details
+        return memberRole === "creator" || memberRole === "member" || memberId === currentUserId;
       }
 
       return false;
     },
-    [currentMembershipRole, isCircleCreator]
+    [currentMembershipRole, currentUserId, isCircleCreator]
   );
 
   const canRemoveMember = useCallback(
@@ -4066,11 +4130,13 @@ const MapScreen: React.FC = () => {
       const memberRole = normalizeRole(member.Membership?.role);
 
       if (isCircleCreator) {
-        return memberRole !== "creator";
+        // creator can change and edit admins and members
+        return memberRole === "admin" || memberRole === "member";
       }
 
       if (currentMembershipRole === "admin") {
-        return memberRole === "member";
+        // Admins can change creator and Members Details
+        return memberRole === "creator" || memberRole === "member";
       }
 
       return false;
@@ -4078,164 +4144,9 @@ const MapScreen: React.FC = () => {
     [currentMembershipRole, currentUserId, isCircleCreator, selectedCircle]
   );
 
-  const openEditMemberModal = useCallback(
-    (member: CircleMember) => {
-      const memberId = resolveMemberId(member);
-      if (!memberId) return;
 
-      if (!canEditMemberRole(member) && !canEditMemberNickname(member)) {
-        Alert.alert("Permission denied", "You do not have permission to modify this member.");
-        return;
-      }
 
-      setMemberBeingEdited(member);
-      setEditedMemberRole(normalizeRole(member.Membership?.role) ?? "member");
-      const baseNickname =
-        member.Membership?.nickname ??
-        member.name ??
-        member.Membership?.nickname ??
-        member.email ??
-        "";
-      setEditedMemberNickname(baseNickname);
-      setSelectedMemberLocationId(resolveMembershipLocationId(member));
-      setMemberModalError(null);
-      setEditMemberModalVisible(true);
-    },
-    [canEditMemberNickname, canEditMemberRole]
-  );
 
-  const closeEditMemberModal = useCallback(() => {
-    setEditMemberModalVisible(false);
-    setMemberBeingEdited(null);
-    setEditedMemberRole("member");
-    setEditedMemberNickname("");
-    setMemberModalError(null);
-    setSelectedMemberLocationId(null);
-  }, []);
-
-  const handleSaveMemberChanges = useCallback(async () => {
-    if (!selectedCircle || !memberBeingEdited) {
-      closeEditMemberModal();
-      return;
-    }
-
-    const circleId = String(selectedCircle.id);
-    const memberId = resolveMemberId(memberBeingEdited);
-    if (!memberId) {
-      closeEditMemberModal();
-      return;
-    }
-
-    const originalRole = normalizeRole(memberBeingEdited.Membership?.role) ?? "member";
-    const originalNickname = memberBeingEdited.Membership?.nickname?.trim() ?? "";
-    const desiredRole = editedMemberRole || "member";
-    const desiredNickname = editedMemberNickname.trim();
-    const originalLocationId = resolveMembershipLocationId(memberBeingEdited);
-    const desiredLocationId = normalizeIdentifier(selectedMemberLocationId);
-
-    const roleChanged = desiredRole !== originalRole;
-    const nicknameChanged = desiredNickname !== originalNickname;
-    const locationChanged = canManageLocations && desiredLocationId !== originalLocationId;
-
-    if (!roleChanged && !nicknameChanged && !locationChanged) {
-      closeEditMemberModal();
-      return;
-    }
-
-    try {
-      setIsSavingMemberChanges(true);
-      setMemberModalError(null);
-
-      if (roleChanged) {
-        if (!canEditMemberRole(memberBeingEdited)) {
-          throw new Error("You do not have permission to change this member's role.");
-        }
-
-        const roleResponse = await authenticatedFetch(
-          `${API_BASE_URL}/circles/${circleId}/members/${memberId}/role`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              accept: "application/json",
-            },
-            body: JSON.stringify({ role: desiredRole }),
-          }
-        );
-
-        if (!roleResponse.ok) {
-          const payload = await roleResponse.json().catch(() => ({}));
-          throw new Error(payload?.message ?? "Failed to update role.");
-        }
-      }
-
-      if (nicknameChanged) {
-        if (!canEditMemberNickname(memberBeingEdited)) {
-          throw new Error("You do not have permission to update this nickname.");
-        }
-
-        const nicknameResponse = await authenticatedFetch(
-          `${API_BASE_URL}/circles/${circleId}/members/${memberId}/nickname`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              accept: "application/json",
-            },
-            body: JSON.stringify({ nickname: desiredNickname }),
-          }
-        );
-
-        if (!nicknameResponse.ok) {
-          const payload = await nicknameResponse.json().catch(() => ({}));
-          throw new Error(payload?.message ?? "Failed to update nickname.");
-        }
-      }
-
-      if (locationChanged) {
-        const assignmentResponse = await authenticatedFetch(
-          `${API_BASE_URL}/circles/${circleId}/assign-location`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              accept: "application/json",
-            },
-            body: JSON.stringify({
-              userId: memberId,
-              locationId: desiredLocationId,
-            }),
-          }
-        );
-
-        if (!assignmentResponse.ok) {
-          const payload = await assignmentResponse.json().catch(() => ({}));
-          throw new Error(payload?.message ?? "Failed to update assigned place.");
-        }
-      }
-
-      await fetchCircleMembers(selectedCircle.id);
-      await loadAssignedLocations(true);
-      closeEditMemberModal();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not update member.";
-      setMemberModalError(message);
-    } finally {
-      setIsSavingMemberChanges(false);
-    }
-  }, [
-    canEditMemberNickname,
-    canEditMemberRole,
-    canManageLocations,
-    closeEditMemberModal,
-    editedMemberNickname,
-    editedMemberRole,
-    fetchCircleMembers,
-    loadAssignedLocations,
-    memberBeingEdited,
-    selectedMemberLocationId,
-    selectedCircle,
-  ]);
 
   const executeRemoveMember = useCallback(
     async (member: CircleMember, memberId: string) => {
@@ -4263,7 +4174,7 @@ const MapScreen: React.FC = () => {
         await loadAssignedLocations(true);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not remove member.";
-        Alert.alert("Remove failed", message);
+        showAlert({ title: "Remove failed", message, type: 'error' });
       } finally {
         setMemberRemovalLoadingId(null);
       }
@@ -4277,24 +4188,25 @@ const MapScreen: React.FC = () => {
       if (!memberId) return;
 
       if (!canRemoveMember(member)) {
-        Alert.alert("Permission denied", "You do not have permission to remove this member.");
+        showAlert({ title: "Permission denied", message: "You do not have permission to remove this member.", type: 'warning' });
         return;
       }
 
       const memberName = member.Membership?.nickname || member.name || member.email || "this member";
 
-      Alert.alert(
-        "Remove member",
-        `Are you sure you want to remove ${memberName} from this circle?`,
-        [
-          { text: "Cancel", style: "cancel" },
+      showAlert({
+        title: "Remove member",
+        message: `Are you sure you want to remove ${memberName} from this circle?`,
+        type: 'confirmation',
+        buttons: [
+          { text: "Cancel", style: "cancel", onPress: () => { } },
           {
             text: "Remove",
             style: "destructive",
             onPress: () => executeRemoveMember(member, memberId),
           },
         ]
-      );
+      });
     },
     [canRemoveMember, executeRemoveMember]
   );
@@ -4302,79 +4214,238 @@ const MapScreen: React.FC = () => {
 
   // --- HANDLERS ---
 
-  const toggleCirclesModal = () => setIsCirclesModalOpen(!isCirclesModalOpen);
+  const handleOpenCirclesModal = useCallback(() => {
+    setIsCirclesModalOpen(true);
+  }, []);
+
+
+
+  const handleOpenDriveDetectionModal = useCallback(() => {
+    setIsDriveDetectionModalOpen(true);
+    setIsSettingsModalOpen(false);
+  }, []);
+
+
+
+
+
+
+
+  const handleAddPeople = useCallback(() => {
+    setIsCirclesModalOpen(true);
+    setIsSettingsModalOpen(false);
+  }, []);
+
+  const handleOpenMemberJourneysModal = useCallback((member: CircleMember) => {
+    const mId = member.id || member.userId;
+    if (selectedCircle?.id && mId) {
+      setSelectedMemberForJourneys(mId);
+      setIsMemberJourneysModalOpen(true);
+    }
+  }, [selectedCircle]);
+  const handleToggleAdminStatus = useCallback(async (userId: string, isAdmin: boolean) => {
+    if (!selectedCircle) return;
+    const desiredRole = isAdmin ? 'admin' : 'member';
+    try {
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/circles/${selectedCircle.id}/members/${userId}/role`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            accept: "application/json",
+          },
+          body: JSON.stringify({ role: desiredRole }),
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.message ?? "Failed to update role.");
+      }
+
+      await fetchCircleMembers(selectedCircle.id);
+    } catch (error: any) {
+      showAlert({ title: "Error", message: error.message || "Failed to update admin status.", type: 'error' });
+      throw error;
+    }
+  }, [selectedCircle, fetchCircleMembers]);
+
+  // Edit Member Modal - computed values and handlers
+  const editMemberModalVisible = isEditMemberModalOpen;
+
+  const canEditRoleInModal = memberBeingEdited ? canEditMemberRole(memberBeingEdited) : false;
+  const canEditNicknameInModal = memberBeingEdited ? canEditMemberNickname(memberBeingEdited) : false;
+
+
+
+  const openEditMemberModal = useCallback((member: CircleMember) => {
+    setMemberBeingEdited(member);
+    setEditedMemberRole(normalizeRole(member.Membership?.role) || 'member');
+    setEditedMemberNickname(member.Membership?.nickname || '');
+    setSelectedMemberLocationId(resolveMembershipLocationId(member));
+    setMemberModalError(null);
+    setIsEditMemberModalOpen(true);
+  }, []);
+
+  const closeEditMemberModal = useCallback(() => {
+    setIsEditMemberModalOpen(false);
+    setMemberBeingEdited(null);
+    setEditedMemberRole('member');
+    setEditedMemberNickname('');
+    setSelectedMemberLocationId(null);
+    setMemberModalError(null);
+  }, []);
+
+  const handleSaveMemberChanges = useCallback(async () => {
+    if (!selectedCircle || !memberBeingEdited || isSavingMemberChanges) return;
+
+    const memberId = resolveMemberId(memberBeingEdited);
+    if (!memberId) {
+      setMemberModalError('Invalid member ID');
+      return;
+    }
+
+    setMemberModalError(null);
+    setIsSavingMemberChanges(true);
+
+    try {
+      const updates: any = {};
+
+      // Update role if changed and allowed
+      const currentRole = normalizeRole(memberBeingEdited.Membership?.role) || 'member';
+      if (canEditRoleInModal && editedMemberRole !== currentRole) {
+        updates.role = editedMemberRole;
+      }
+
+      // Update nickname if changed and allowed
+      const currentNickname = memberBeingEdited.Membership?.nickname || '';
+      if (canEditNicknameInModal && editedMemberNickname !== currentNickname) {
+        updates.nickname = editedMemberNickname;
+      }
+
+      // Update location assignment if changed
+      const currentLocationId = resolveMembershipLocationId(memberBeingEdited);
+      if (selectedMemberLocationId !== currentLocationId) {
+        updates.locationId = selectedMemberLocationId;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        setMemberModalError('No changes to save');
+        return;
+      }
+
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/circles/${selectedCircle.id}/members/${memberId}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'application/json',
+          },
+          body: JSON.stringify(updates),
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.message ?? 'Failed to update member');
+      }
+
+      await fetchCircleMembers(selectedCircle.id);
+      showAlert({ title: 'Success', message: 'Member updated successfully', type: 'success' });
+      closeEditMemberModal();
+    } catch (error: any) {
+      setMemberModalError(error.message || 'Failed to update member');
+    } finally {
+      setIsSavingMemberChanges(false);
+    }
+  }, [
+    selectedCircle,
+    memberBeingEdited,
+    isSavingMemberChanges,
+    canEditRoleInModal,
+    canEditNicknameInModal,
+    editedMemberRole,
+    editedMemberNickname,
+    selectedMemberLocationId,
+    fetchCircleMembers,
+    showAlert,
+    closeEditMemberModal,
+  ]);
 
   const handleStartInviteFlow = () => {
     if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle first to invite new members.");
+      showAlert({ title: "Select a circle", message: "Choose a circle first to invite new members.", type: 'info' });
       return;
     }
-    setShareTargetCircle(selectedCircle);
-    setShareRequestId((prev) => prev + 1);
-    setIsCirclesModalOpen(true);
+    setIsAddPeopleModalOpen(true);
   };
 
   const handleNavigateToAddPlace = () => {
     if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle before adding a place.");
+      showAlert({ title: "Select a circle", message: "Choose a circle before adding a place.", type: 'info' });
       return;
     }
     snapTo(MIN_HEIGHT);
     setIsExpanded(false);
-    setPlaceModalMode("create");
-    setLocationBeingEdited(null);
+
+    setAddPlaceMode('create');
+    setEditingLocation(null);
     setIsAddPlaceModalOpen(true);
   };
 
   const handleEditSavedPlace = (locationPoint: LocationPoint) => {
     if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle before editing a place.");
+      showAlert({ title: "Select a circle", message: "Choose a circle before editing a place.", type: 'info' });
       return;
     }
 
     if (!canManageLocations) {
-      Alert.alert("Permission denied", "You do not have permission to update saved places.");
+      showAlert({ title: "Permission denied", message: "You do not have permission to update saved places.", type: 'warning' });
       return;
     }
 
     const hasValidId = locationPoint?.id !== undefined && locationPoint?.id !== null && String(locationPoint.id).trim().length > 0;
     if (!hasValidId) {
-      Alert.alert("Cannot edit place", "This saved location is missing an identifier and cannot be updated.");
+      showAlert({ title: "Cannot edit place", message: "This saved location is missing an identifier and cannot be updated.", type: 'error' });
       return;
     }
 
     snapTo(MIN_HEIGHT);
     setIsExpanded(false);
-    setPlaceModalMode("edit");
-    setLocationBeingEdited(locationPoint);
+
+    setAddPlaceMode('edit');
+    setEditingLocation(locationPoint);
     setIsAddPlaceModalOpen(true);
   };
 
   const handleDeleteSavedPlace = (locationPoint: LocationPoint) => {
     if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle before deleting a place.");
+      showAlert({ title: "Select a circle", message: "Choose a circle before deleting a place.", type: 'info' });
       return;
     }
 
     if (!canManageLocations) {
-      Alert.alert("Permission denied", "You do not have permission to delete saved places.");
+      showAlert({ title: "Permission denied", message: "You do not have permission to delete saved places.", type: 'warning' });
       return;
     }
 
     const hasValidId = locationPoint?.id !== undefined && locationPoint?.id !== null && String(locationPoint.id).trim().length > 0;
     if (!hasValidId) {
-      Alert.alert("Cannot delete place", "This saved location is missing an identifier.");
+      showAlert({ title: "Cannot delete place", message: "This saved location is missing an identifier.", type: 'error' });
       return;
     }
 
     const locationId = String(locationPoint.id);
     const placeName = locationPoint.name || "this place";
 
-    Alert.alert(
-      "Delete Place",
-      `Are you sure you want to delete "${placeName}"? This will also remove any user assignments to this place.`,
-      [
-        { text: "Cancel", style: "cancel" },
+    showAlert({
+      title: "Delete Place",
+      message: `Are you sure you want to delete "${placeName}"? This will also remove any user assignments to this place.`,
+      type: 'confirmation',
+      buttons: [
+        { text: "Cancel", style: "cancel", onPress: () => { } },
         {
           text: "Delete",
           style: "destructive",
@@ -4400,23 +4471,31 @@ const MapScreen: React.FC = () => {
               // Refresh data
               await loadCircles(true);
               await loadAssignedLocations(true);
-              Alert.alert("Success", "Location deleted successfully.");
+              showAlert({ title: "Success", message: "Location deleted successfully.", type: 'success' });
 
             } catch (error) {
               const message = error instanceof Error ? error.message : "Could not delete location.";
-              Alert.alert("Delete failed", message);
+              showAlert({ title: "Delete failed", message, type: 'error' });
             } finally {
               setLoading(false);
             }
           },
         },
       ]
-    );
+    });
   };
 
   const handleSelectMemberLocation = useCallback((locationId: string | null) => {
     setSelectedMemberLocationId(locationId);
   }, []);
+
+  const handleAddPlace = useCallback(() => {
+    if (selectedCircle) {
+      setAddPlaceMode('create');
+      setEditingLocation(null);
+      setIsAddPlaceModalOpen(true);
+    }
+  }, [selectedCircle]);
 
   const locationSelectionControls = useMemo(() => {
     if (!canManageLocations) {
@@ -4481,49 +4560,53 @@ const MapScreen: React.FC = () => {
     );
   }, [assignedLocationLabel, canManageLocations, handleSelectMemberLocation, locationOptions, selectedMemberLocationId]);
 
-  const handleClosePlaceModal = useCallback(() => {
-    setIsAddPlaceModalOpen(false);
-    setLocationBeingEdited(null);
-    setPlaceModalMode("create");
-  }, []);
+
 
   const handleLogout = () => {
-    setAccountActionsVisible(false);
-    Alert.alert("Logout", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            setLoading(true);
-            if (isNativePlatform) {
-              try {
-                const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
-                if (hasStarted) {
-                  await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+
+    showAlert({
+      title: "Logout",
+      message: "Are you sure?",
+      type: 'confirmation',
+      buttons: [
+        { text: "Cancel", style: "cancel", onPress: () => { } },
+        {
+          text: "Logout",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              if (isNativePlatform) {
+                try {
+                  const hasStarted = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+                  if (hasStarted) {
+                    await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK_NAME);
+                  }
+                } catch (stopError) {
+                  console.warn("Failed to stop background updates during logout", stopError);
                 }
-              } catch (stopError) {
-                console.warn("Failed to stop background updates during logout", stopError);
               }
+              await AsyncStorage.removeItem(STORAGE_KEYS.lastSelectedCircleId).catch(() => undefined);
+              await clearAllPostedLocations();
+              await clearCircleLocationsCache();
+              await clearLocationPresenceMap();
+              await logout();
+              router.replace("/screens/LogInScreen");
+            } catch (error) {
+              setLoading(false);
+              const message = error instanceof Error ? error.message : "Could not log out.";
+              showAlert({ title: "Logout failed", message, type: 'error' });
             }
-            await AsyncStorage.removeItem(STORAGE_KEYS.lastSelectedCircleId).catch(() => undefined);
-            await clearAllPostedLocations();
-            await clearCircleLocationsCache();
-            await clearLocationPresenceMap();
-            await logout();
-            router.replace("/screens/LogInScreen");
-          } catch (error) {
-            setLoading(false);
-            const message = error instanceof Error ? error.message : "Could not log out.";
-            Alert.alert("Logout failed", message);
-          }
+          },
         },
-      },
-    ]);
+      ]
+    });
   };
 
   const handleOpenMapLayersModal = () => setIsMapStyleModalOpen(true);
+
+
+
   const handleChangeMapStyle = (type: MapType) => {
     setMapLayerStyle(type);
     setIsMapStyleModalOpen(false);
@@ -4532,131 +4615,23 @@ const MapScreen: React.FC = () => {
   const handleOpenChat = async () => {
     const url = 'sms:';
     try { await Linking.openURL(url); }
-    catch { Alert.alert("Chat Unavailable", "Unable to open the messaging app."); }
+    catch { showAlert({ title: "Chat Unavailable", message: "Unable to open the messaging app.", type: 'warning' }); }
   };
 
-  const executeSosAlert = useCallback(async () => {
-    if (isSendingSos) {
-      return;
-    }
 
-    if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle before sending an SOS alert.");
-      return;
-    }
 
-    setIsSendingSos(true);
-
-    try {
-      const circleId = normalizeIdentifier(selectedCircle.id);
-      if (!circleId) {
-        throw new Error("We could not determine which circle to notify. Please select a circle and try again.");
-      }
-
-      const circleName = asNonEmptyString(selectedCircle.name);
-      const memberIds = selectedCircleMembers
-        .map((member) => resolveMemberId(member))
-        .filter((memberId): memberId is string => typeof memberId === "string" && memberId.trim().length > 0)
-        .filter((memberId) => !currentUserId || memberId !== currentUserId);
-      const notifyMemberIds = Array.from(new Set(memberIds));
-
-      let coords = location;
-
-      if (!coords) {
-        try {
-          const latest = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          coords = {
-            latitude: latest.coords.latitude,
-            longitude: latest.coords.longitude,
-            heading: latest.coords.heading ?? undefined,
-          };
-          setLocation({ latitude: coords.latitude, longitude: coords.longitude, heading: coords.heading });
-        } catch (positionError) {
-          console.warn("Unable to refresh location for SOS alert", positionError);
-        }
-      }
-
-      if (!coords) {
-        throw new Error("We could not determine your current location.");
-      }
-
-      const payload: Record<string, unknown> = {
-        message: circleName ? `Emergency SOS – ${circleName}` : "Emergency SOS alert",
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-      };
-
-      payload.circleId = circleId;
-
-      if (circleName) {
-        payload.circleName = circleName;
-      }
-
-      if (currentUserId) {
-        payload.senderId = currentUserId;
-      }
-
-      if (notifyMemberIds.length > 0) {
-        payload.notifyMemberIds = notifyMemberIds;
-      }
-
-      const response = await authenticatedFetch(`${API_BASE_URL}/profile/sos`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const isJson = response.headers.get("content-type")?.includes("application/json");
-      const body = isJson ? await response.json().catch(() => ({})) : {};
-
-      if (!response.ok) {
-        const message = typeof body?.message === "string" && body.message.trim().length > 0
-          ? body.message
-          : "Unable to send the SOS alert.";
-        throw new Error(message);
-      }
-
-      const successMessage = typeof body?.message === "string" && body.message.trim().length > 0
-        ? body.message
-        : "SOS alert sent successfully.";
-
-      Alert.alert("SOS sent", successMessage);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "We could not send your SOS alert. Please try again.";
-      Alert.alert("SOS failed", message);
-    } finally {
-      setIsSendingSos(false);
-    }
-  }, [currentUserId, isSendingSos, location, selectedCircle, selectedCircleMembers]);
 
   const handlePressSos = useCallback(() => {
-    if (isSendingSos) {
-      return;
-    }
-
     if (!selectedCircle) {
-      Alert.alert("Select a circle", "Choose a circle before sending an SOS alert.");
+      showAlert({ title: "Select a circle", message: "Choose a circle before sending an SOS alert.", type: 'info' });
       return;
     }
+    setIsSosModalOpen(true);
+  }, [selectedCircle]);
 
-    Alert.alert(
-      "Send SOS alert?",
-      "This will notify your circle members using your current location.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Send",
-          style: "destructive",
-          onPress: () => {
-            void executeSosAlert();
-          },
-        },
-      ]
-    );
-  }, [executeSosAlert, isSendingSos, selectedCircle]);
+  const handleCloseLocationHistoryModal = useCallback(() => {
+    setIsLocationHistoryModalVisible(false);
+  }, []);
 
 
 
@@ -4722,15 +4697,7 @@ const MapScreen: React.FC = () => {
   }, [locationHistoryLoading]);
 
   const handleOpenLocationHistoryModal = useCallback(() => {
-    setShouldRenderLocationHistoryMap(false);
-    setIsLocationHistoryModalVisible(true);
-    setAccountActionsVisible(false);
-    void fetchLocationHistory();
-  }, [fetchLocationHistory]);
-
-  const handleCloseLocationHistoryModal = useCallback(() => {
-    setIsLocationHistoryModalVisible(false);
-    setShouldRenderLocationHistoryMap(false);
+    router.push('/screens/LocationHistoryScreen' as any);
   }, []);
 
   const handleSelectLocationHistoryFilter = useCallback((filterKey: LocationHistoryFilterKey) => {
@@ -4741,23 +4708,12 @@ const MapScreen: React.FC = () => {
     }
   }, []);
 
-  const handleCustomFilterStartChange = useCallback((value: string) => {
-    setLocationHistoryCustomStart(value);
-  }, []);
-
-  const handleCustomFilterEndChange = useCallback((value: string) => {
-    setLocationHistoryCustomEnd(value);
-  }, []);
-
   const handleRefreshLocationHistory = useCallback(() => {
     void fetchLocationHistory();
   }, [fetchLocationHistory]);
 
   const renderLocationHistoryItem = useCallback(({ item }: { item: LocationHistoryEntry }) => {
-    const createdAtDate = new Date(item.createdAt);
-    const timestampLabel = Number.isNaN(createdAtDate.getTime())
-      ? item.createdAt
-      : createdAtDate.toLocaleString();
+    const timestampLabel = formatToSLTime(item.createdAt);
 
     return (
       <View style={styles.locationHistoryListItem}>
@@ -4796,7 +4752,7 @@ const MapScreen: React.FC = () => {
 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (permission.status !== "granted") {
-        Alert.alert("Permission required", "Allow photo library access to update your profile picture.");
+        showAlert({ title: "Permission required", message: "Allow photo library access to update your profile picture.", type: 'warning' });
         return;
       }
 
@@ -4825,7 +4781,7 @@ const MapScreen: React.FC = () => {
       setProfileAvatarUpload(preparedImage);
     } catch (error) {
       console.warn("Failed to pick profile image", error);
-      Alert.alert("Image error", "We couldn't open that image. Please try again.");
+      showAlert({ title: "Image error", message: "We couldn't open that image. Please try again.", type: 'error' });
     } finally {
       setIsPickingProfileImage(false);
     }
@@ -4896,14 +4852,14 @@ const MapScreen: React.FC = () => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || "Verification failed");
 
-      // Ideally refresh user profile here
-      // await fetchUserProfile(); 
-      Alert.alert("Success", "Email verified successfully!");
+      // Refresh user profile here
+      await fetchCurrentUserProfile();
+      showAlert({ title: "Success", message: "Email verified successfully!", type: 'success' });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Verification failed.";
       throw new Error(message);
     }
-  }, []);
+  }, [fetchCurrentUserProfile]);
 
   const handleSubmitPhoneVerification = useCallback(async (phone: string, code: string) => {
     try {
@@ -4916,12 +4872,18 @@ const MapScreen: React.FC = () => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || "Verification failed");
 
-      Alert.alert("Success", "Phone verified successfully!");
+      // Store tokens if returned (standard for phone login/verification as it might act as a login)
+      if (data.token) {
+        await storeTokens(data.token, data.refreshToken);
+      }
+
+      await fetchCurrentUserProfile();
+      showAlert({ title: "Success", message: "Phone verified successfully!", type: 'success' });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Verification failed.";
       throw new Error(message);
     }
-  }, []);
+  }, [fetchCurrentUserProfile]);
 
   const handleSubmitProfileUpdate = useCallback(async () => {
     if (isSavingProfile) return;
@@ -4991,7 +4953,7 @@ const MapScreen: React.FC = () => {
 
 
       setProfileAvatarUpload(null);
-      Alert.alert("Profile updated", "Your profile details were saved.");
+      showAlert({ title: "Profile updated", message: "Your profile details were saved.", type: 'success' });
 
       if (hasAvatarChange && profileAvatarUpload) {
         setProfileAvatarOriginal(profileAvatarUpload.uri);
@@ -5030,7 +4992,7 @@ const MapScreen: React.FC = () => {
 
   const executeDeleteCircle = useCallback(async () => {
     if (!selectedCircle) {
-      Alert.alert("No circle selected", "Select a circle before deleting.");
+      showAlert({ title: "No circle selected", message: "Select a circle before deleting.", type: 'info' });
       return;
     }
 
@@ -5060,6 +5022,8 @@ const MapScreen: React.FC = () => {
       await removeCachedCircleLocations(circleIdParam);
       setSelectedCircle(null);
       setSelectedCircleMembers([]);
+      setMemberAvatarUrls({});
+      setMemberLocations({});
       setCircles((prev) => {
         const filtered = prev.filter((circle) => String(circle.id) !== circleIdParam);
         circlesRef.current = filtered;
@@ -5067,19 +5031,19 @@ const MapScreen: React.FC = () => {
       });
       await loadCircles(true);
       await loadAssignedLocations(true);
-      Alert.alert("Circle deleted", "The circle was deleted successfully.");
+      showAlert({ title: "Circle deleted", message: "The circle was deleted successfully.", type: 'success' });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to delete this circle.";
-      Alert.alert("Delete failed", message);
+      showAlert({ title: "Delete failed", message, type: 'error' });
     } finally {
       setIsDeletingCircle(false);
-      setAccountActionsVisible(false);
+
     }
   }, [isDeletingCircle, loadAssignedLocations, loadCircles, selectedCircle]);
 
   const executeLeaveCircle = useCallback(async () => {
     if (!selectedCircle) {
-      Alert.alert("No circle selected", "Select a circle before leaving.");
+      showAlert({ title: "No circle selected", message: "Select a circle before leaving.", type: 'info' });
       return;
     }
 
@@ -5108,32 +5072,35 @@ const MapScreen: React.FC = () => {
       await removeLastPostedLocationForCircle(circleIdParam).catch(() => undefined);
       setSelectedCircle(null);
       setSelectedCircleMembers([]);
+      setMemberAvatarUrls({});
+      setMemberLocations({});
       await loadCircles(true);
       await loadAssignedLocations(true);
       await removeCachedCircleLocations(circleIdParam);
-      Alert.alert("Circle left", "You have left the circle successfully.");
+      showAlert({ title: "Circle left", message: "You have left the circle successfully.", type: 'success' });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to leave this circle.";
-      Alert.alert("Leave failed", message);
+      showAlert({ title: "Leave failed", message, type: 'error' });
     } finally {
       setIsLeavingCircle(false);
-      setAccountActionsVisible(false);
+
     }
   }, [isLeavingCircle, loadAssignedLocations, loadCircles, selectedCircle]);
 
   const handleDeleteCircle = useCallback(() => {
     if (!selectedCircle) {
-      Alert.alert("No circle selected", "Select a circle before deleting.");
+      showAlert({ title: "No circle selected", message: "Select a circle before deleting.", type: 'info' });
       return;
     }
 
-    setAccountActionsVisible(false);
+
     const circleName = selectedCircle?.name ?? "this circle";
-    Alert.alert(
-      "Delete circle",
-      `Deleting ${circleName} will remove the circle for every member. This action cannot be undone.`,
-      [
-        { text: "Cancel", style: "cancel" },
+    showAlert({
+      title: "Delete circle",
+      message: `Deleting ${circleName} will remove the circle for every member. This action cannot be undone.`,
+      type: 'confirmation',
+      buttons: [
+        { text: "Cancel", style: "cancel", onPress: () => { } },
         {
           text: "Delete",
           style: "destructive",
@@ -5142,22 +5109,55 @@ const MapScreen: React.FC = () => {
           },
         },
       ]
-    );
+    });
   }, [executeDeleteCircle, selectedCircle]);
 
   const handleLeaveCircle = useCallback(() => {
     if (!selectedCircle) {
-      Alert.alert("No circle selected", "Select a circle before leaving.");
+      showAlert({ title: "No circle selected", message: "Select a circle before leaving.", type: 'info' });
       return;
     }
 
-    setAccountActionsVisible(false);
+
     const circleName = selectedCircle?.name ?? "this circle";
-    Alert.alert(
-      "Leave circle",
-      `Are you sure you want to leave ${circleName}?`,
-      [
-        { text: "Cancel", style: "cancel" },
+
+    if (isCircleCreator) {
+      showAlert({
+        title: "Cannot Leave Circle",
+        message: "You are the creator of this circle. Creators cannot leave their own circle. If you wish to remove it for everyone, please use the 'Delete Circle' option in Circle Management.",
+        type: 'warning'
+      });
+      return;
+    }
+
+    // Check if current user is an admin and if they are the only admin
+    const isAdmin = currentMembershipRole === "admin";
+    if (isAdmin) {
+      const otherAdmins = selectedCircleMembers.filter((m) => {
+        const mId = resolveMemberId(m);
+        // exclude self
+        if (mId === currentUserId) return false;
+        // check role
+        const role = normalizeRole(m.Membership?.role);
+        return role === "admin";
+      });
+
+      if (otherAdmins.length === 0) {
+        showAlert({
+          title: "Cannot Leave Circle",
+          message: "You are the only admin in this circle. Please appoint another member as an admin before leaving to ensure the circle can still be managed.",
+          type: 'warning'
+        });
+        return;
+      }
+    }
+
+    showAlert({
+      title: "Leave circle",
+      message: `Are you sure you want to leave ${circleName}?`,
+      type: 'confirmation',
+      buttons: [
+        { text: "Cancel", style: "cancel", onPress: () => { } },
         {
           text: "Leave",
           style: "destructive",
@@ -5166,8 +5166,8 @@ const MapScreen: React.FC = () => {
           },
         },
       ]
-    );
-  }, [executeLeaveCircle, selectedCircle]);
+    });
+  }, [executeLeaveCircle, selectedCircle, isCircleCreator, currentMembershipRole, selectedCircleMembers, currentUserId]);
 
   // --- RENDER HELPERS ---
 
@@ -5234,8 +5234,7 @@ const MapScreen: React.FC = () => {
     );
   }
 
-  const canEditRoleInModal = memberBeingEdited ? canEditMemberRole(memberBeingEdited) : false;
-  const canEditNicknameInModal = memberBeingEdited ? canEditMemberNickname(memberBeingEdited) : false;
+
 
   // Fallback location if permissions denied (e.g., center of map)
   const mapRegion = location ? {
@@ -5264,11 +5263,11 @@ const MapScreen: React.FC = () => {
   //   setLocationHistoryError(null);
   //   setLocationHistoryLoading(true);
   //   try {
-  //     const params = new URLSearchParams({ limit: String(LOCATION_HISTORY_LIMIT), offset: "0", filter: "today", userId: memberId });
+  //     const params = new URLSearchParams({limit: String(LOCATION_HISTORY_LIMIT), offset: "0", filter: "today", userId: memberId });
   //     const response = await authenticatedFetch(`${API_BASE_URL}/profile/location-history?${params.toString()}`, {
-  //       headers: { accept: "application/json" },
+  //       headers: {accept: "application/json" },
   //     });
-  //     const payload = await response.json().catch(() => ({}));
+  //     const payload = await response.json().catch(() => ({ }));
   //     if (!response.ok) {
   //       const message = payload?.message ?? "Failed to load location history.";
   //       throw new Error(message);
@@ -5302,29 +5301,6 @@ const MapScreen: React.FC = () => {
   //     setLocationHistoryLoading(false);
   //   }
   // };
-
-
-
-
-
-
-  // Handler to open journeys modal with a specific member
-  const handleOpenMemberJourneysModal = async (member: CircleMember) => {
-    // If it's the current user, try to inject the latest local battery info
-    let memberData = member;
-    const memberId = resolveMemberId(member);
-    if (memberId && currentUserId && memberId === currentUserId && currentUserBatteryLevel) {
-      memberData = {
-        ...member,
-        batteryLevel: currentUserBatteryLevel,
-      };
-    }
-
-    // Show modal directly with member data (populated via fetchCircleHistory)
-    setMemberJourneysData(memberData);
-    setIsMemberJourneysModalVisible(true);
-  };
-
   const renderMemberMarker = (
     memberId: string | null,
     coordinate: UserLocation | null | undefined,
@@ -5482,8 +5458,8 @@ const MapScreen: React.FC = () => {
     );
   };
 
-  // Determine if the current user's location is already present in memberLocations
-  const hasMemberLocationForCurrentUser = typeof currentUserId === "string" && currentUserId in memberLocations;
+  const hasMemberLocationForCurrentUser = Boolean(currentUserId && memberLocations[currentUserId]);
+
   const shouldRenderStandaloneCurrentUserMarker = Boolean(location) && !hasMemberLocationForCurrentUser;
 
   return (
@@ -5642,19 +5618,21 @@ const MapScreen: React.FC = () => {
 
         {/* --- TOP HEADER --- */}
         <View style={[styles.headerContainer, { paddingTop: insets.top + 10 }]}>
-          <TouchableOpacity style={styles.roundButton} onPress={() => setIsSettingsModalVisible(true)}>
+          <TouchableOpacity style={styles.roundButton} onPress={handleOpenSettingsModal}>
             <Ionicons name="settings-sharp" size={24} color={COLORS.black} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.circleSelector} onPress={toggleCirclesModal} activeOpacity={0.9}>
+          <TouchableOpacity style={styles.circleSelector} onPress={handleOpenCirclesModal} activeOpacity={0.9}>
             <View style={styles.selectorTextContainer}>
-              <Text style={styles.selectorLabel}>Current Circle</Text>
-              <Text style={styles.circleName} numberOfLines={1}>{selectedCircle ? selectedCircle.name : "Select Circle"}</Text>
+
+              <Text style={styles.circleName} numberOfLines={1}>
+                {selectedCircle ? selectedCircle.name : (circles.length === 0 ? "No Circle" : "Select Circle")}
+              </Text>
             </View>
             <Ionicons name="chevron-down" size={20} color={COLORS.primary} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.roundButton} onPress={() => setIsNotificationsModalVisible(true)}>
+          <TouchableOpacity style={styles.roundButton} onPress={handleOpenNotificationsModal}>
             <NotificationIcon width={22} height={22} color={COLORS.black} />
           </TouchableOpacity>
         </View>
@@ -5673,21 +5651,17 @@ const MapScreen: React.FC = () => {
             { bottom: Animated.add(sheetHeight, 20) }
           ]}
         >
-          <TouchableOpacity style={styles.pillButton}>
+          <TouchableOpacity style={styles.pillButton} onPress={handleNavigateToAddPlace}>
             <View style={styles.iconCirclePurple}><Ionicons name="checkmark" size={16} color={COLORS.white} /></View>
             <Text style={styles.pillButtonText}>Check in</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.pillButton, isSendingSos && styles.pillButtonDisabled]}
+            style={styles.pillButton}
             onPress={handlePressSos}
-            disabled={isSendingSos}
           >
             <View style={styles.iconCircleRed}><MaterialCommunityIcons name="lifebuoy" size={18} color={COLORS.white} /></View>
-            <Text style={styles.pillButtonText}>{isSendingSos ? "Sending..." : "SOS"}</Text>
-            {isSendingSos ? (
-              <ActivityIndicator size="small" color={COLORS.accent} style={styles.pillButtonSpinner} />
-            ) : null}
+            <Text style={styles.pillButtonText}>SOS</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.roundButtonSmall} onPress={handleOpenMapLayersModal}>
@@ -5699,39 +5673,7 @@ const MapScreen: React.FC = () => {
 
 
 
-        <CircleNotificationSettingsModal
-          visible={isCircleNotificationSettingsModalVisible}
-          onClose={() => setIsCircleNotificationSettingsModalVisible(false)}
-          loading={isSavingCircleNotificationSettings}
-          settings={currentNotificationSettings}
-          onSave={handleSaveCircleNotificationSettings}
-          insets={insets}
-        />
-
-        <SettingsModal
-          visible={isSettingsModalVisible}
-          onClose={() => setIsSettingsModalVisible(false)}
-          onSmartNotifications={() => {
-            setIsSettingsModalVisible(false);
-            handleOpenCircleNotificationSettings();
-          }}
-          onAddPeople={() => {
-            setIsSettingsModalVisible(false);
-            handleStartInviteFlow();
-          }}
-          onAccount={() => {
-            setIsSettingsModalVisible(false);
-            setAccountActionsVisible(true);
-          }}
-          onLogout={handleLogout}
-        />
-
-        <MemberJourneysModal
-          visible={isMemberJourneysModalVisible}
-          onClose={() => setIsMemberJourneysModalVisible(false)}
-          member={memberJourneysData}
-          insets={insets}
-        />
+        {/* Modals replaced by Screen navigation */}
 
         {/* --- UNIFIED BOTTOM SHEET (Content and Nav) --- */}
         <Animated.View style={[styles.unifiedSheet, { height: sheetHeight, paddingBottom: insets.bottom + keyboardHeight }]}>
@@ -5775,19 +5717,7 @@ const MapScreen: React.FC = () => {
                   >
                     <MaterialCommunityIcons name="office-building" size={20} color={activeSection === 'place' ? COLORS.white : COLORS.primary} />
                   </TouchableOpacity>
-                  <TouchableOpacity
-                    style={{
-                      width: 101, height: 38, borderRadius: 23.5,
-                      backgroundColor: activeSection === 'key' ? COLORS.primary : '#DBEAFE',
-                      alignItems: 'center', justifyContent: 'center'
-                    }}
-                    onPress={() => {
-                      scrollToSection('key');
-                      setActiveSection('key');
-                    }}
-                  >
-                    <Ionicons name="bluetooth" size={20} color={activeSection === 'key' ? COLORS.white : COLORS.primary} />
-                  </TouchableOpacity>
+
                 </View>
 
                 {/* Members Section */}
@@ -5864,7 +5794,7 @@ const MapScreen: React.FC = () => {
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <TouchableOpacity
                           style={{ padding: 8 }}
-                          onPress={() => setSelectedJourneyMember(member)}
+                          onPress={() => handleOpenMemberJourneysModal(member)}
                         >
                           <Ionicons name="car-sport-outline" size={20} color="#3B82F6" />
                         </TouchableOpacity>
@@ -6035,22 +5965,7 @@ const MapScreen: React.FC = () => {
 
                 <View style={{ height: 20 }} />
 
-                {/* Items Section */}
-                <View onLayout={e => { sectionPositions['key'] = e.nativeEvent.layout.y; }}>
-                  <Text style={{ fontSize: 18, fontWeight: '700', color: '#1E3A8A', marginBottom: 12 }}>Items</Text>
-                  <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <View style={{
-                      width: 48, height: 48, borderRadius: 24,
-                      backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center',
-                      marginRight: 14
-                    }}>
-                      <Ionicons name="bluetooth" size={24} color={COLORS.primary} />
-                    </View>
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#6B7280' }}>Add and Item</Text>
-                  </TouchableOpacity>
 
-
-                </View>
 
 
 
@@ -6245,11 +6160,41 @@ const MapScreen: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Coming Soon Section */}
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
-                  <Text style={{ fontSize: 14, color: COLORS.gray, fontWeight: '500' }}>Will be available soon</Text>
-                  <View style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB', marginLeft: 12 }} />
-                </View>
+                {/* SOS Alert Card */}
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#EF4444', // Red for SOS
+                    borderRadius: 16,
+                    padding: 20,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginBottom: 20
+                  }}
+                  onPress={() => {
+                    if (selectedCircle?.id) {
+                      setIsSosModalOpen(true);
+                    } else {
+                      showAlert({ title: "Select a Circle", message: "Please select a circle first.", type: 'info' });
+                    }
+                  }}
+                >
+                  <View style={{
+                    width: 64, height: 64, borderRadius: 32,
+                    backgroundColor: '#FCA5A5',
+                    alignItems: 'center', justifyContent: 'center',
+                    marginRight: 16
+                  }}>
+                    <MaterialCommunityIcons name="alert-circle-outline" size={32} color="#7F1D1D" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFF', marginBottom: 4 }}>
+                      SOS Alert
+                    </Text>
+                    <Text style={{ fontSize: 13, color: '#FEE2E2', lineHeight: 18 }}>
+                      Send an immediate alert to your circle and emergency contacts.
+                    </Text>
+                  </View>
+                </TouchableOpacity>
 
                 {/* Crash Detection Card */}
                 <View style={{
@@ -6398,157 +6343,21 @@ const MapScreen: React.FC = () => {
           </View>
         </Animated.View>
 
-        <CirclesModal
-          isOpen={isCirclesModalOpen}
-          onClose={() => setIsCirclesModalOpen(false)}
-          onRefresh={requestCirclesRefresh}
-          circles={circles as any}
-          loadingCircles={loadingCircles}
-          onSelectCircle={handleSelectCircle}
-          shareTargetCircle={shareTargetCircle as any}
-          shareRequestId={shareRequestId}
-          onShareHandled={() => setShareTargetCircle(null)}
-        />
-
-        <AddPlaceModal
-          visible={isAddPlaceModalOpen}
-          mode={placeModalMode}
-          circleId={selectedCircle?.id ?? null}
-          circleName={selectedCircle?.name ?? null}
-          editingLocation={locationBeingEdited}
-          onClose={handleClosePlaceModal}
-          onPlaceSaved={requestCirclesRefresh}
-        />
+        {/* CirclesModal removed */}
 
 
 
-        <SettingsModal
-          visible={isSettingsModalVisible}
-          onClose={handleCloseSettingsModal}
-          onAccount={handleOpenAccountModal}
-          onSmartNotifications={() => {
-            handleOpenCircleNotificationSettings();
-          }}
-          onLocationSharing={() => {
-            handleOpenLocationSharingModal();
-          }}
-          onCircleManagement={() => {
-            handleOpenCircleManagementModal();
-          }}
-          onAddPeople={() => {
-            handleOpenAddPeopleModal();
-          }}
-          onLogout={() => {
-            handleCloseSettingsModal();
-            handleLogout();
-          }}
-        // Pass other handlers as needed or leave optional
-        />
 
-        <LocationSharingModal
-          visible={isLocationSharingModalVisible}
-          onClose={handleCloseLocationSharingModal}
-          isSharing={locationSharingEnabled}
-          onToggleSharing={handleToggleLocationSharing}
-          currentUser={{
-            name: currentMembership?.name || storedUser?.name,
-            avatarUrl: extractAvatarUrl(currentMembership) || currentUserAvatarUrl,
-            initials: currentMembership?.name ? currentMembership.name.substring(0, 2).toUpperCase() : undefined
-          }}
-        />
 
-        <CircleManagementModal
-          visible={isCircleManagementModalVisible}
-          onClose={handleCloseCircleManagementModal}
-          circleName={selectedCircle?.name || ""}
-          isCircleCreator={isCircleCreator}
-          myRole={currentMembership?.Membership?.nickname || normalizeRole((currentMembership?.Membership as any)?.role)}
-          onDeleteCircle={handleDeleteCircle}
-          onLeaveCircle={handleLeaveCircle}
-          onUpdateCircleName={async (newName) => {
-            if (!selectedCircle) return;
-            try {
-              const res = await authenticatedFetch(`${API_BASE_URL}/circles/${selectedCircle.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json', 'accept': 'application/json' },
-                body: JSON.stringify({ name: newName })
-              });
-              if (res.ok) {
-                Alert.alert("Success", "Circle name updated.");
-                // Optimistic update or refresh
-                setSelectedCircle(prev => prev ? ({ ...prev, name: newName }) : null);
-                setCircles(prev => prev.map(c => c.id === selectedCircle.id ? { ...c, name: newName } : c));
-              } else {
-                const d = await res.json().catch(() => ({}));
-                Alert.alert("Error", d.message || "Failed to update circle name.");
-              }
-            } catch (e) {
-              Alert.alert("Error", "Network error updating circle name.");
-            }
-          }}
-          onAddPeople={() => {
-            handleCloseCircleManagementModal();
-            handleOpenAddPeopleModal();
-          }}
-          isDeleting={isDeletingCircle}
-          isLeaving={isLeavingCircle}
-        />
+        {/* SettingsModal removed */}
 
-        <AccountModal
-          visible={isAccountModalVisible}
-          onClose={handleCloseAccountModal}
-          colors={COLORS}
+        {/* LocationSharingModal removed */}
 
-          onPressLocationHistory={() => {
-            setIsAccountModalVisible(false);
-            handleOpenLocationHistoryModal();
-          }}
-          onPressLogout={() => {
-            setIsAccountModalVisible(false);
-            handleLogout();
-          }}
-          isCircleCreator={isCircleCreator}
-          onPressDeleteCircle={() => {
-            setIsAccountModalVisible(false);
-            handleDeleteCircle();
-          }}
-          onPressLeaveCircle={() => {
-            setIsAccountModalVisible(false);
-            handleLeaveCircle();
-          }}
+        {/* CircleManagementModal removed */}
 
-          isDeletingCircle={isDeletingCircle}
-          isLeavingCircle={isLeavingCircle}
-          canDeleteCircle={Boolean(selectedCircle)}
-          canLeaveCircle={Boolean(selectedCircle)}
+        {/* AccountModal removed */}
 
-          // Profile Props
-          email={storedUser?.email ?? currentMembership?.email ?? undefined}
-          phone={storedUser?.phoneNumber ?? (currentMembership as any)?.phoneNumber ?? (currentMembership as any)?.phone ?? undefined}
-          profileNameInput={profileNameInput}
-          setProfileNameInput={setProfileNameInput}
-          profileMetadataInput={profileMetadataInput}
-          setProfileMetadataInput={setProfileMetadataInput}
-          profileAvatarPreview={profileAvatarPreview}
-          isSavingProfile={isSavingProfile}
-          isPickingProfileImage={isPickingProfileImage}
-          profileModalError={profileModalError}
-          onPickProfileImage={handlePickProfileImage}
-          onClearProfileImage={handleClearProfileImage}
-          onSaveProfile={handleSaveProfile}
-
-          // Verification Handlers
-          onVerifyEmail={handleInitiateEmailVerification}
-          onVerifyPhone={handleInitiatePhoneVerification}
-          onSubmitEmailVerification={handleSubmitEmailVerification}
-          onSubmitPhoneVerification={handleSubmitPhoneVerification}
-        />
-
-        <NotificationsModal
-          visible={isNotificationsModalVisible}
-          onClose={() => setIsNotificationsModalVisible(false)}
-          colors={COLORS}
-        />
+        {/* NotificationsModal removed */}
 
         <Modal
           visible={isLocationHistoryModalVisible}
@@ -6646,31 +6455,46 @@ const MapScreen: React.FC = () => {
               {locationHistoryActiveFilter === "custom" ? (
                 <View style={styles.locationHistoryCustomRange}>
                   <View style={styles.locationHistoryCustomInputBlock}>
-                    <Text style={styles.locationHistoryCustomLabel}>Start (YYYY-MM-DD)</Text>
-                    <TextInput
+                    <Text style={styles.locationHistoryCustomLabel}>Start</Text>
+                    <TouchableOpacity
                       style={styles.locationHistoryCustomInput}
-                      placeholder="2025-12-01"
-                      placeholderTextColor={COLORS.gray}
-                      value={locationHistoryCustomStart}
-                      onChangeText={handleCustomFilterStartChange}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"}
-                    />
+                      onPress={() => setShowLocationHistoryCustomStartPicker(true)}
+                    >
+                      <Text style={{ color: locationHistoryCustomStart ? COLORS.black : COLORS.gray }}>
+                        {locationHistoryCustomStart || "Select Start Date"}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                   <View style={[styles.locationHistoryCustomInputBlock, styles.locationHistoryCustomInputBlockLast]}>
-                    <Text style={styles.locationHistoryCustomLabel}>End (YYYY-MM-DD)</Text>
-                    <TextInput
+                    <Text style={styles.locationHistoryCustomLabel}>End</Text>
+                    <TouchableOpacity
                       style={styles.locationHistoryCustomInput}
-                      placeholder="2025-12-10"
-                      placeholderTextColor={COLORS.gray}
-                      value={locationHistoryCustomEnd}
-                      onChangeText={handleCustomFilterEndChange}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      keyboardType={Platform.OS === "ios" ? "numbers-and-punctuation" : "default"}
-                    />
+                      onPress={() => setShowLocationHistoryCustomEndPicker(true)}
+                    >
+                      <Text style={{ color: locationHistoryCustomEnd ? COLORS.black : COLORS.gray }}>
+                        {locationHistoryCustomEnd || "Select End Date"}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
+
+                  {showLocationHistoryCustomStartPicker && (
+                    <DateTimePicker
+                      value={parseDateInput(locationHistoryCustomStart) || new Date()}
+                      mode="date"
+                      display="default"
+                      maximumDate={new Date()}
+                      onChange={handleCustomStartChange}
+                    />
+                  )}
+                  {showLocationHistoryCustomEndPicker && (
+                    <DateTimePicker
+                      value={parseDateInput(locationHistoryCustomEnd) || new Date()}
+                      mode="date"
+                      display="default"
+                      maximumDate={new Date()}
+                      onChange={handleCustomEndChange}
+                    />
+                  )}
                 </View>
               ) : null}
 
@@ -6847,7 +6671,7 @@ const MapScreen: React.FC = () => {
                     {isSavingMemberChanges ? (
                       <ActivityIndicator size="small" color={COLORS.white} />
                     ) : (
-                      <Text style={styles.memberModalPrimaryText}>Save</Text>
+                      <Text style={styles.memberModalPrimaryText}>Edit</Text>
                     )}
                   </TouchableOpacity>
                 </View>
@@ -6869,12 +6693,12 @@ const MapScreen: React.FC = () => {
             onPress={() => setIsMapStyleModalOpen(false)}
           >
             <View style={[styles.mapStyleModalContent, { paddingBottom: Platform.OS === 'ios' ? insets.bottom + 10 : 20 }]}>
-              <View style={styles.modalHeaderRow}>
+              {/* <View style={styles.modalHeaderRow}>
                 <TouchableOpacity onPress={() => setIsMapStyleModalOpen(false)} style={styles.modalCloseIcon}>
                   <Ionicons name="close" size={24} color={COLORS.black} />
                 </TouchableOpacity>
                 <Text style={styles.activateSosText}>Activate SOS →</Text>
-              </View>
+              </View> */}
 
               <Text style={styles.modalTitle}>Map type</Text>
 
@@ -6913,11 +6737,203 @@ const MapScreen: React.FC = () => {
         </Modal>
 
         {/* --- MEMBER JOURNEYS MODAL --- */}
+        {/* MemberJourneysModal removed */}
+
+        {/* Startup Loading Overlay */}
+        {startupStatus && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999 }]}>
+            <StartupLoading status={startupStatus} progress={startupProgress} />
+          </View>
+        )}
+
+        {/* Global Action Loading Overlay */}
+        {(loading && !startupStatus) && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9998, backgroundColor: 'rgba(255,255,255,0.4)', justifyContent: 'center', alignItems: 'center' }]}>
+            <BlurView intensity={30} style={StyleSheet.absoluteFill} tint="light" />
+            <View style={{ backgroundColor: 'white', padding: 24, borderRadius: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 }}>
+              <ActivityIndicator size="large" color={COLORS.primary} />
+            </View>
+          </View>
+        )}
+
+        <NotificationToast
+          visible={!!toastNotification}
+          notification={toastNotification}
+          onClose={() => setToastNotification(null)}
+          onPress={() => {
+            setToastNotification(null);
+            router.push('/screens/NotificationsScreen' as any);
+          }}
+        />
+
+        <CirclesModal
+          isOpen={isCirclesModalOpen}
+          onClose={() => setIsCirclesModalOpen(false)}
+          onRefresh={requestCirclesRefresh}
+          circles={circles}
+          loadingCircles={loadingCircles}
+          activeCircleId={selectedCircle?.id}
+          onSelectCircle={(id) => {
+            selectCircle(id);
+            setIsCirclesModalOpen(false);
+          }}
+        />
+
+        <AddPlaceModal
+          visible={isAddPlaceModalOpen}
+          onClose={() => setIsAddPlaceModalOpen(false)}
+          circleId={selectedCircle?.id}
+          circleName={selectedCircle?.name}
+          mode={addPlaceMode}
+          editingLocation={editingLocation}
+          // The AddPlaceModal is a simplified version so onPlaceSaved might not be triggered yet
+          // but we prepare for its integration.
+          onPlaceSaved={() => {
+            loadCircles(true);
+            setIsAddPlaceModalOpen(false);
+          }}
+        />
+
         <MemberJourneysModal
-          visible={!!selectedJourneyMember}
-          onClose={() => setSelectedJourneyMember(null)}
-          member={selectedJourneyMember}
-          insets={insets}
+          isOpen={isMemberJourneysModalOpen}
+          onClose={() => setIsMemberJourneysModalOpen(false)}
+          circleId={selectedCircle?.id}
+          memberId={selectedMemberForJourneys}
+        />
+
+        <SettingsModal
+          isOpen={isSettingsModalOpen}
+          onClose={() => setIsSettingsModalOpen(false)}
+          circleId={selectedCircle?.id}
+          circleName={selectedCircle?.name}
+          onOpenSmartNotifications={handleOpenSmartNotificationsModal}
+          onOpenLocationSharing={handleOpenLocationSharingModal}
+          onOpenCircleManagement={handleOpenCircleManagementModal}
+          onOpenAddPeople={handleOpenAddPeopleModal}
+          onOpenAccount={handleOpenAccountModal}
+          onOpenDriveDetection={handleOpenDriveDetectionModal}
+          onOpenCreateCircle={handleOpenCreateCircleModal}
+          onLogout={handleLogout}
+        />
+
+        <CreateCircleModal
+          isOpen={isCreateCircleModalOpen}
+          onClose={() => setIsCreateCircleModalOpen(false)}
+          onCreate={async (name) => {
+            try {
+              await handleCreateCircleAction(name);
+              await requestCirclesRefresh();
+              setIsCreateCircleModalOpen(false);
+              showAlert({ title: "Success", message: "Circle created successfully!", type: 'success' });
+            } catch (error: any) {
+              showAlert({ title: "Error", message: error.message, type: 'error' });
+            }
+          }}
+        />
+
+        <JoinCircleModal
+          isOpen={isJoinCircleModalOpen}
+          onClose={() => setIsJoinCircleModalOpen(false)}
+          onJoin={async (pin) => {
+            try {
+              await handleJoinCircleAction(pin);
+              await requestCirclesRefresh();
+              setIsJoinCircleModalOpen(false);
+              showAlert({ title: "Success", message: "Joined circle successfully!", type: 'success' });
+            } catch (error: any) {
+              showAlert({ title: "Error", message: error.message, type: 'error' });
+            }
+          }}
+        />
+
+        <NotificationsModal
+          isOpen={isNotificationsModalOpen}
+          onClose={() => setIsNotificationsModalOpen(false)}
+        />
+
+        <DriveDetectionModal
+          isOpen={isDriveDetectionModalOpen}
+          onClose={() => setIsDriveDetectionModalOpen(false)}
+        />
+
+        <AccountModal
+          isOpen={isAccountModalOpen}
+          onClose={() => setIsAccountModalOpen(false)}
+        />
+
+        <LocationSharingModal
+          isOpen={isLocationSharingModalOpen}
+          onClose={() => setIsLocationSharingModalOpen(false)}
+          userName={storedUser?.name || "User"}
+          userAvatarUrl={currentUserAvatarUrl}
+          userRole={selectedCircle ? formatRoleLabel(currentMembershipRole) : "None"}
+        />
+
+        <SmartNotificationModal
+          isOpen={isSmartNotificationModalOpen}
+          onClose={() => setIsSmartNotificationModalOpen(false)}
+          userName={storedUser?.name || "User"}
+          userAvatarUrl={currentUserAvatarUrl}
+        />
+
+        <CircleManagementModal
+          isOpen={isCircleManagementModalOpen}
+          onClose={() => setIsCircleManagementModalOpen(false)}
+          circleId={selectedCircle?.id}
+          circleName={selectedCircle?.name}
+          userRole={currentMembershipRole ?? "Member"}
+          onOpenAdminManagement={() => {
+            setIsCircleManagementModalOpen(false);
+            // In NearU, admin management is done per member in the bottom sheet list.
+            // We can scroll to the members section as a way to "manage" them.
+            scrollToSection('members');
+            setActiveSection('members');
+            snapTo(MAX_HEIGHT);
+            setIsExpanded(true);
+          }}
+          onOpenEditCircle={() => {
+            setIsCircleManagementModalOpen(false);
+            setIsEditCircleNameModalOpen(true);
+          }}
+          onAddPeople={() => {
+            setIsCircleManagementModalOpen(false);
+            handleStartInviteFlow();
+          }}
+          onLeaveCircle={() => {
+            setIsCircleManagementModalOpen(false);
+            handleLeaveCircle();
+          }}
+        />
+
+        <EditCircleNameModal
+          isOpen={isEditCircleNameModalOpen}
+          onClose={() => setIsEditCircleNameModalOpen(false)}
+          initialName={selectedCircle?.name || ""}
+          onSave={async (newName) => {
+            try {
+              if (!selectedCircle) return;
+              await handleUpdateCircleNameAction(selectedCircle.id, newName);
+              await requestCirclesRefresh();
+              setIsEditCircleNameModalOpen(false);
+              showAlert({ title: "Success", message: "Circle name updated!", type: 'success' });
+            } catch (error: any) {
+              showAlert({ title: "Error", message: error.message, type: 'error' });
+            }
+          }}
+        />
+
+        <SosModal
+          isOpen={isSosModalOpen}
+          onClose={() => setIsSosModalOpen(false)}
+          circleId={selectedCircle?.id}
+          circleName={selectedCircle?.name}
+        />
+
+        <AddPeopleModal
+          isOpen={isAddPeopleModalOpen}
+          onClose={() => setIsAddPeopleModalOpen(false)}
+          circleId={selectedCircle?.id}
+          circleName={selectedCircle?.name}
         />
 
       </View>

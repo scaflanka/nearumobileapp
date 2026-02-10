@@ -2,11 +2,13 @@ import { API_BASE_URL } from '@/utils/auth';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAlert } from '../context/AlertContext'; // Added
 
 const ForgotPasswordReset = () => {
     const router = useRouter();
+    const { showAlert } = useAlert(); // Added
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{ resetId: string }>();
 
@@ -54,13 +56,14 @@ const ForgotPasswordReset = () => {
             const data = await response.json();
 
             if (response.ok && data.success) {
-                Alert.alert(
-                    "Success",
-                    "Your password has been reset successfully. Please log in with your new password.",
-                    [
+                showAlert({
+                    title: "Success",
+                    message: "Your password has been reset successfully. Please log in with your new password.",
+                    type: 'success',
+                    buttons: [
                         { text: "OK", onPress: () => router.replace('/screens/LogInScreen') }
                     ]
-                );
+                });
             } else {
                 setErrorMessage(data.message || 'Failed to reset password. Please try again.');
             }

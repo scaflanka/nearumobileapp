@@ -10,18 +10,20 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-interface MemberJourneysModalProps {
+interface CircleNotificationSettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
     circleId?: string | number;
-    memberId?: string | number;
+    initialSettings?: any;
+    onSettingsChanged?: (settings: any) => void;
 }
 
-const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
+const CircleNotificationSettingsModal: React.FC<CircleNotificationSettingsModalProps> = ({
     isOpen,
     onClose,
     circleId,
-    memberId
+    initialSettings,
+    onSettingsChanged
 }) => {
     if (!isOpen) return null;
 
@@ -36,16 +38,16 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                 <View style={styles.header}>
                     <TouchableOpacity onPress={onClose} style={styles.backButton}>
                         <Ionicons name="chevron-back" size={24} color="#113C9C" />
-                        <Text style={styles.headerTitle}>Member Journeys</Text>
+                        <Text style={styles.headerTitle}>Notification Settings</Text>
                     </TouchableOpacity>
                 </View>
 
                 <ScrollView contentContainerStyle={styles.content}>
                     <View style={styles.emptyContainer}>
-                        <Ionicons name="car-outline" size={64} color="#9CA3AF" />
-                        <Text style={styles.emptyTitle}>Member Journeys</Text>
+                        <Ionicons name="notifications-outline" size={64} color="#9CA3AF" />
+                        <Text style={styles.emptyTitle}>Notification Settings</Text>
                         <Text style={styles.emptyText}>
-                            Journey history will appear here
+                            Notification preferences will appear here
                         </Text>
                     </View>
                 </ScrollView>
@@ -72,4 +74,4 @@ const styles = StyleSheet.create({
     emptyText: { fontSize: 14, color: '#9CA3AF', textAlign: 'center' },
 });
 
-export default MemberJourneysModal;
+export default CircleNotificationSettingsModal;

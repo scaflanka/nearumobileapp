@@ -60,15 +60,16 @@ export const syncLocationQueue = async () => {
 
     const remainingQueue: LocationData[] = [];
 
+    const circleId = await AsyncStorage.getItem("mapScreen:lastSelectedCircleId");
+    const isDriveDetectionEnabled = (await AsyncStorage.getItem("user_drive_detection_enabled")) === "true";
+
+    if (!circleId) {
+        console.warn("No circle ID found for background update. Aborting sync.");
+        return;
+    }
+
     for (const loc of queue) {
         try {
-            const circleId = await AsyncStorage.getItem("mapScreen:lastSelectedCircleId");
-
-            if (!circleId) {
-                console.warn("No circle ID found for background update. Dropping location.");
-                continue;
-            }
-
             const response = await authenticatedFetch(`${API_BASE_URL}/profile/circles/${circleId}/location`, {
                 method: "POST",
                 headers: {
@@ -81,7 +82,7 @@ export const syncLocationQueue = async () => {
                     name: "Background Update",
                     metadata: {
                         accuracy: loc.accuracy,
-                        speed: loc.speed,
+                        speed: isDriveDetectionEnabled ? loc.speed : null,
                         timestamp: loc.timestamp,
                         is_offline_sync: true
                     }

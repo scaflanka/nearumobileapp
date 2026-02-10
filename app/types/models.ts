@@ -44,6 +44,7 @@ export interface Journey {
 
 export interface CircleMember {
   id?: IdLike;
+  userId?: IdLike;
   name?: string;
   email?: string;
   avatar?: string | null;
