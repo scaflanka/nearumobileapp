@@ -280,6 +280,10 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
             const circlePayload = extractCirclePayload(createData);
             setCreatedCircleData(circlePayload);
 
+            if (circlePayload?.id) {
+                await AsyncStorage.setItem("mapScreen:lastSelectedCircleId", String(circlePayload.id)).catch(() => undefined);
+            }
+
             const { code, expiresAt } = resolveInvitationDetails(circlePayload);
             if (code) setGeneratedCode(code);
             if (expiresAt) setCodeExpiry(expiresAt);
@@ -435,6 +439,12 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
             const data = await response.json().catch(() => ({}));
             if (response.ok) {
                 showAlert({ title: "Success", message: "Joined circle successfully!", type: 'success' });
+
+                const joinedCircle = extractCirclePayload(data);
+                if (joinedCircle?.id) {
+                    await AsyncStorage.setItem("mapScreen:lastSelectedCircleId", String(joinedCircle.id)).catch(() => undefined);
+                }
+
                 setOtp(new Array(6).fill(""));
                 if (onRefresh) await onRefresh();
                 await loadInvitations();
@@ -868,7 +878,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     secondaryButtonText: { color: "#FFFFFF", fontSize: 14, fontWeight: "600" },
-    fullScreenContainer: { flexGrow: 1},
+    fullScreenContainer: { flexGrow: 1 },
     invitationsHeaderRow: { marginBottom: 12 },
     backButtonSimple: { flexDirection: "row", alignItems: "center" },
     backButtonSimpleText: { fontSize: 16, color: "#2563eb", marginLeft: 4 },

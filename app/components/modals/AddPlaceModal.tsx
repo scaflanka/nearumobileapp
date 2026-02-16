@@ -42,6 +42,9 @@ type LocationEditPayload = {
     metadata?: Record<string, any> | null;
 };
 
+import { BatteryLevelInfo, CircleMember, LocationPoint, UserLocation } from "../../types/models";
+import { LocationMarker, MemberMarker } from "../MapMarkers";
+
 interface AddPlaceModalProps {
     visible: boolean;
     circleId?: number | string | null;
@@ -50,6 +53,14 @@ interface AddPlaceModalProps {
     onPlaceSaved?: () => void | Promise<void>;
     mode?: "create" | "edit";
     editingLocation?: LocationEditPayload | null;
+    // Added for cross-feature visibility
+    members?: CircleMember[];
+    memberLocations?: Record<string, UserLocation>;
+    savedPlaces?: LocationPoint[];
+    currentUserId?: string | null;
+    currentUserAvatarUrl?: string | null;
+    currentUserBatteryLevel?: BatteryLevelInfo | null;
+    memberAvatarUrls?: Record<string, string | null>;
 }
 
 const COLORS = {
@@ -222,6 +233,13 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     onPlaceSaved,
     mode = "create",
     editingLocation = null,
+    members = [],
+    memberLocations = {},
+    savedPlaces = [],
+    currentUserId = null,
+    currentUserAvatarUrl = null,
+    currentUserBatteryLevel = null,
+    memberAvatarUrls = {},
 }) => {
     const [locationSearchQuery, setLocationSearchQuery] = useState("");
     const [locationSearchResults, setLocationSearchResults] = useState<GeocodeSuggestion[]>([]);
@@ -238,6 +256,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
     const [isNotifyOnArrival, setIsNotifyOnArrival] = useState(true);
     const [isNotifyOnDeparture, setIsNotifyOnDeparture] = useState(true);
+    const [mapType, setMapType] = useState<"standard" | "satellite">("standard");
 
     const hasHydratedRef = useRef(false);
     const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -549,11 +568,17 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
 
     const handleRegionChangeComplete = useCallback(
         (region: Region) => {
+            if (region.latitudeDelta < 0.02) {
+                if (mapType !== 'satellite') setMapType('satellite');
+            } else {
+                if (mapType === 'satellite') setMapType('standard');
+            }
+
             if (isSavingLocation) return;
             // distinct from "animate to region" - user moved map manually
             updateSelectedLocation(region.latitude, region.longitude, undefined, false, false, false);
         },
-        [isSavingLocation, updateSelectedLocation]
+        [isSavingLocation, updateSelectedLocation, mapType]
     );
 
     const handleRadiusSliderChange = useCallback((value: number | number[]) => {
@@ -800,6 +825,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                     showsUserLocation={canShowUserLocation}
                                     showsMyLocationButton={canShowUserLocation}
                                     onRegionChangeComplete={handleRegionChangeComplete}
+                                    mapType={mapType}
                                 >
                                     {selectedLocation && (
                                         <Circle
@@ -810,6 +836,72 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                             strokeWidth={2}
                                         />
                                     )}
+
+                                    {/* Render other saved places in the circle */}
+                                    {savedPlaces.map((loc, idx) => {
+                                        // Skip the one we are currently editing to avoid duplication
+                                        if (isEditMode && editingLocation?.id && String(loc.id) === String(editingLocation.id)) {
+                                            return null;
+                                        }
+
+                                        let markerTitle = loc.name || "Saved Place";
+                                        let markerDescription: string | undefined;
+
+                                        if (loc.metadata && typeof loc.metadata === 'object') {
+                                            const meta = loc.metadata as any;
+                                            markerDescription = meta.address || meta.formattedAddress;
+                                        }
+
+                                        return (
+                                            <LocationMarker
+                                                key={`other-loc-${loc.id || idx}`}
+                                                coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
+                                                title={markerTitle}
+                                                description={markerDescription}
+                                                radius={(loc.metadata as any)?.radius || DEFAULT_RADIUS_METERS}
+                                                isAssignedToCurrentUser={false}
+                                            />
+                                        );
+                                    })}
+
+                                    {/* Render circle members */}
+                                    {Object.entries(memberLocations).map(([mId, coords]) => {
+                                        const isCurrentUser = currentUserId === mId;
+                                        const memberRecord = members.find(m => {
+                                            const mid = m.id || (m as any).userId || (m as any).UserId;
+                                            return String(mid) === String(mId);
+                                        });
+
+                                        if (!coords || !coords.latitude || !coords.longitude) return null;
+
+                                        const displayName = isCurrentUser
+                                            ? "You"
+                                            : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Member";
+
+                                        const fallbackSeed = memberRecord?.email ?? memberRecord?.name ?? memberRecord?.Membership?.nickname ?? mId ?? "member";
+                                        const avatarCandidate = isCurrentUser ? currentUserAvatarUrl : mId ? memberAvatarUrls[mId] : null;
+                                        let resolvedAvatar = avatarCandidate || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackSeed)}&background=random`;
+
+                                        if (resolvedAvatar && resolvedAvatar.startsWith("/") && !resolvedAvatar.startsWith("http")) {
+                                            resolvedAvatar = `${API_BASE_URL}${resolvedAvatar}`.replace("/api/uploads", "/uploads");
+                                        }
+
+                                        const batteryInfo = isCurrentUser ? currentUserBatteryLevel : memberRecord?.batteryLevel;
+                                        const batteryValue = batteryInfo?.batteryLevel != null ? Math.round(batteryInfo.batteryLevel) : 100;
+
+                                        return (
+                                            <MemberMarker
+                                                key={`member-${mId}`}
+                                                memberId={mId}
+                                                coordinate={coords}
+                                                displayName={displayName}
+                                                avatarUrl={resolvedAvatar}
+                                                batteryLevel={batteryValue}
+                                                isCurrentUser={isCurrentUser}
+                                                relation={memberRecord?.Membership?.metadata?.relation}
+                                            />
+                                        );
+                                    })}
                                 </MapView>
                                 <View style={styles.centerMarkerContainer} pointerEvents="none">
                                     <Ionicons name="location" size={36} color={COLORS.accent} />

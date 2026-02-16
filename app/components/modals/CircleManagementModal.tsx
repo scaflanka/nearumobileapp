@@ -19,7 +19,7 @@ interface CircleManagementModalProps {
     circleId?: string | number;
     circleName?: string;
     userRole?: string;
-    onOpenAdminManagement?: () => void;
+    onOpenAdminManagement?: (type?: string) => void;
     onOpenEditCircle?: () => void;
     onAddPeople?: () => void;
     onLeaveCircle?: () => void;
@@ -115,12 +115,21 @@ const CircleManagementModal: React.FC<CircleManagementModalProps> = ({
                             <Text style={styles.sectionHeaderText}>{circleName} Circle Management</Text>
                         </View>
 
-                        <View style={styles.menuItem}>
+                        <TouchableOpacity
+                            style={styles.menuItem}
+                            onPress={() => {
+                                // We'll trigger a shared handler or state
+                                if (onOpenAdminManagement) {
+                                    // No longer hacky, properly typed!
+                                    onOpenAdminManagement('my-role');
+                                }
+                            }}
+                        >
                             <Text style={styles.menuItemText}>My Role</Text>
                             <Text style={styles.roleText}>{formattedRole}</Text>
-                        </View>
+                        </TouchableOpacity>
 
-                        <TouchableOpacity style={styles.menuItem} onPress={onOpenAdminManagement}>
+                        <TouchableOpacity style={styles.menuItem} onPress={() => onOpenAdminManagement?.()}>
                             <Text style={styles.menuItemText}>Change Admin Status</Text>
                         </TouchableOpacity>
 

@@ -69,6 +69,7 @@ import {
   UserLocation,
 } from "../types/models";
 // --- Custom Modals ---
+import { LocationMarker, MemberMarker } from "../components/MapMarkers";
 import AccountModal from "../components/modals/AccountModal";
 import AddPeopleModal from "../components/modals/AddPeopleModal";
 import AddPlaceModal from "../components/modals/AddPlaceModal";
@@ -78,6 +79,7 @@ import DriveDetectionModal from "../components/modals/DriveDetectionModal";
 import EditCircleNameModal from "../components/modals/EditCircleNameModal";
 import LocationSharingModal from "../components/modals/LocationSharingModal";
 import MemberJourneysModal from "../components/modals/MemberJourneysModal";
+import MyRoleModal from "../components/modals/MyRoleModal";
 import NotificationsModal from "../components/modals/NotificationsModal";
 import SettingsModal from "../components/modals/SettingsModal";
 import SmartNotificationModal from "../components/modals/SmartNotificationModal";
@@ -365,7 +367,7 @@ const setLastPostedLocationForCircle = async (
 
 
 
-const handleCreateCircleAction = async (name: string): Promise<void> => {
+const handleCreateCircleAction = async (name: string): Promise<any> => {
   const response = await authenticatedFetch(`${API_BASE_URL}/circles`, {
     method: "POST",
     headers: { "Content-Type": "application/json", accept: "application/json" },
@@ -380,8 +382,7 @@ const handleCreateCircleAction = async (name: string): Promise<void> => {
     throw new Error(error.message || "Failed to create circle");
   }
 
-  // Refresh circles list or select new circle logic if needed
-  // This logic should ideally be passed down or handled here
+  return await response.json();
 };
 
 const handleUpdateCircleNameAction = async (circleId: any, name: string): Promise<void> => {
@@ -397,7 +398,7 @@ const handleUpdateCircleNameAction = async (circleId: any, name: string): Promis
   }
 };
 
-const handleJoinCircleAction = async (pin: string): Promise<void> => {
+const handleJoinCircleAction = async (pin: string): Promise<any> => {
   const response = await authenticatedFetch(`${API_BASE_URL}/circles/join-by-code`, {
     method: "POST",
     headers: { "Content-Type": "application/json", accept: "application/json" },
@@ -408,6 +409,8 @@ const handleJoinCircleAction = async (pin: string): Promise<void> => {
     const data = await response.json().catch(() => ({}));
     throw new Error(data.message || "Invalid or expired code.");
   }
+
+  return await response.json();
 };
 
 const removeLastPostedLocationForCircle = async (circleId: string) => {
@@ -1299,108 +1302,169 @@ const extractBatteryLevelInfo = (candidate: unknown): BatteryLevelInfo | null =>
   return null;
 };
 const extractCircleMembers = (circle: any): CircleMember[] => {
-  if (!circle) return [];
+  if (!circle) {
+    console.log("extractCircleMembers: No circle data provided");
+    return [];
+  }
 
+  console.log("extractCircleMembers: Processing circle:", circle.id, circle.name);
+  console.log("extractCircleMembers: Full circle object keys:", Object.keys(circle));
+
+  // Check data.members[] first as this is where the API puts member data
   const candidateLists = [
-    circle?.Users,
-    circle?.users,
+    circle?.data?.members,      // PRIORITY: API returns members here
+    circle?.data?.Members,
     circle?.members,
+    circle?.Members,
+    circle?.users,
+    circle?.Users,
     circle?.param?.users,
     circle?.data?.users,
-    circle?.data?.members,
   ];
 
-  console.log("CandidateList.......", candidateLists);
+  console.log("extractCircleMembers: Checking candidate member lists...");
+  candidateLists.forEach((list, index) => {
+    if (Array.isArray(list)) {
+      console.log(`extractCircleMembers: ✅ Found member list at index ${index} with ${list.length} members`);
+      console.log(`extractCircleMembers: First member sample:`, list[0]);
+    }
+  });
 
   let rawMembers = candidateLists.find((value) => Array.isArray(value)) ?? [];
 
   if (!Array.isArray(rawMembers)) rawMembers = [];
 
+  console.log(`extractCircleMembers: Initial rawMembers count: ${rawMembers.length}`);
+
   // --- FIX: Explicitly check for creator and add if missing ---
-  const creator = circle?.creator ?? circle?.Creator;
+  const creator = circle?.creator ?? circle?.Creator ?? circle?.data?.creator;
   if (creator && typeof creator === "object") {
+    console.log("extractCircleMembers: Found creator:", {
+      id: creator.id,
+      name: creator.name,
+      hasLiveLocation: !!creator.liveLocation,
+      hasBatteryLevel: !!creator.batteryLevel,
+      liveLocation: creator.liveLocation,
+      batteryLevel: creator.batteryLevel
+    });
+
     const creatorId = creator.id ?? creator.userId ?? creator.UserId;
     if (creatorId) {
       const exists = rawMembers.some((m: any) => (m.id ?? m.userId) === creatorId);
       if (!exists) {
+        console.log("extractCircleMembers: Adding creator to members list");
         // Normalize creator to look like a member
         const normalizedCreator = {
           ...creator,
+          // Ensure liveLocation is preserved
+          liveLocation: creator.liveLocation ?? creator.currentLocation ?? creator.location,
+          // Ensure batteryLevel is preserved
+          batteryLevel: creator.batteryLevel,
           // Creator typically has 'admin' or 'creator' role implicitly,
           // but we can mock a Membership object if missing
           Membership: creator.Membership ?? {
-            role: "creator",
+            role: creator.role ?? "creator",
+            status: creator.status ?? "accepted",
             nickname: creator.name ?? creator.email,
           },
         };
         rawMembers = [normalizedCreator, ...rawMembers];
+        console.log("extractCircleMembers: Creator added successfully");
+      } else {
+        console.log("extractCircleMembers: Creator already exists in members list");
       }
+    } else {
+      console.log("extractCircleMembers: Creator has no valid ID");
     }
+  } else {
+    console.log("extractCircleMembers: No creator found in circle data");
   }
   // ------------------------------------------------------------
 
+  console.log(`extractCircleMembers: Total rawMembers before mapping: ${rawMembers.length}`);
+
   return rawMembers
     .filter(Boolean)
-    .map((member: any) => ({
-      id: member?.id ?? member?.userId ?? member?.UserId ?? undefined,
-      name: member?.name ?? member?.Name,
-      email: member?.email ?? member?.Email,
+    .map((member: any, index: number) => {
+      const memberId = member?.id ?? member?.userId ?? member?.UserId ?? undefined;
+      const memberName = member?.name ?? member?.Name ?? "Unknown";
 
-      // Avatar Fix: Check profileLink first, then direct string
-      avatar:
-        (() => {
-          const raw = member?.profileLink ??
-            member?.avatar ??
-            extractAvatarUrl(member) ??
-            extractAvatarUrl(member?.Membership) ??
-            null;
+      console.log(`extractCircleMembers: Processing member ${index + 1}/${rawMembers.length}:`, {
+        id: memberId,
+        name: memberName,
+        hasLiveLocation: !!member?.liveLocation,
+        hasBatteryLevel: !!member?.batteryLevel,
+        liveLocation: member?.liveLocation,
+        batteryLevel: member?.batteryLevel,
+        memberKeys: Object.keys(member || {})
+      });
 
-          if (typeof raw === "string" && raw.trim().length > 0) {
-            let cleaned = raw.trim();
-            if (cleaned.startsWith("/")) {
-              cleaned = `${API_BASE_URL}${cleaned}`;
+      // Log the full member object for the first member to see structure
+      if (index === 0) {
+        console.log("extractCircleMembers: Full first member object:", JSON.stringify(member, null, 2));
+      }
+
+      return {
+        id: memberId,
+        name: memberName,
+        email: member?.email ?? member?.Email,
+
+        // Avatar Fix: Check profileLink first, then direct string
+        avatar:
+          (() => {
+            const raw = member?.profileLink ??
+              member?.avatar ??
+              extractAvatarUrl(member) ??
+              extractAvatarUrl(member?.Membership) ??
+              null;
+
+            if (typeof raw === "string" && raw.trim().length > 0) {
+              let cleaned = raw.trim();
+              if (cleaned.startsWith("/")) {
+                cleaned = `${API_BASE_URL}${cleaned}`;
+              }
+              return cleaned.replace("/api/uploads", "/uploads");
             }
-            return cleaned.replace("/api/uploads", "/uploads");
+            return raw;
+          })(),
+
+        // Battery Fix: Check nested object property first
+        batteryLevel: (() => {
+          // Debug Log
+          if (member?.batteryLevel) {
+            console.log(`[BatteryDebug] ${memberName}:`, JSON.stringify(member.batteryLevel));
           }
-          return raw;
+
+          let result = extractBatteryLevelInfo(member?.batteryLevel);
+
+          if (!result) {
+            result = extractBatteryLevelInfo(member?.latestBatteryLevel) ??
+              extractBatteryLevelInfo(member?.Membership?.batteryLevel) ??
+              null;
+          }
+
+          console.log(`[ExtractedResult] ${memberName}:`, JSON.stringify(result));
+          return result;
         })(),
 
-      // Battery Fix: Check nested object property first
-      batteryLevel: (() => {
-        // Debug Log
-        if (member?.batteryLevel) {
-          console.log(`[BatteryDebug] ${member.name}:`, JSON.stringify(member.batteryLevel));
-        }
+        currentLocation:
+          member?.liveLocation ??
+          member?.currentLocation ??
+          member?.current_location ??
+          member?.latestLocation ??
+          member?.latest_location ??
+          member?.lastLocation ??
+          member?.last_location ??
+          member?.lastKnownLocation ??
+          member?.location ??
+          null,
 
-        let result = extractBatteryLevelInfo(member?.batteryLevel);
+        Membership: member?.Membership ?? member?.membership ?? undefined,
 
-        if (!result) {
-          result = extractBatteryLevelInfo(member?.latestBatteryLevel) ??
-            extractBatteryLevelInfo(member?.Membership?.batteryLevel) ??
-            null;
-        }
-
-        console.log(`[ExtractedResult] ${member.name}:`, JSON.stringify(result));
-        return result;
-      })(),
-
-      currentLocation:
-        member?.liveLocation ??
-        member?.currentLocation ??
-        member?.current_location ??
-        member?.latestLocation ??
-        member?.latest_location ??
-        member?.lastLocation ??
-        member?.last_location ??
-        member?.lastKnownLocation ??
-        member?.location ??
-        null,
-
-      Membership: member?.Membership ?? member?.membership ?? undefined,
-
-      locationHistory: member?.todayLocationHistory ?? member?.locationHistory ?? [],
-      journeys: member?.journeys ?? [],
-    }));
+        locationHistory: member?.todayLocationHistory ?? member?.locationHistory ?? [],
+        journeys: member?.journeys ?? [],
+      };
+    });
 };
 const parseAssignedLocationsList = (payload: any): any[] => {
   if (Array.isArray(payload)) {
@@ -1686,6 +1750,8 @@ const extractCoordinatesFromCandidate = (candidate: unknown, visited = new WeakS
         longitude,
         accuracy,
         heading,
+        battery: asNonEmptyString(obj.battery) ?? (obj.batteryLevel !== undefined ? String(obj.batteryLevel) : undefined),
+        updatedAt: asNonEmptyString(obj.updatedAt) ?? asNonEmptyString(obj.timestamp) ?? asNonEmptyString(obj.updated) ?? asNonEmptyString(obj.created_at) ?? asNonEmptyString(obj.createdAt),
       };
     }
   }
@@ -1902,11 +1968,14 @@ const extractLocationFromMemberRecord = (member: CircleMember): UserLocation | n
 const buildMemberLocationMap = (circlePayload: any, members: CircleMember[]): Record<string, UserLocation> => {
   const map: Record<string, UserLocation> = {};
   if (!members.length) {
+    console.log("buildMemberLocationMap: No members provided");
     return map;
   }
 
+  console.log("buildMemberLocationMap: Processing", members.length, "members");
   const nameLookup = buildMemberNameLookup(members);
   const rawLocations = gatherLocationEntries(circlePayload);
+  console.log("buildMemberLocationMap: Found", rawLocations.length, "raw location entries");
 
   for (const raw of rawLocations) {
     if (!raw || typeof raw !== "object") {
@@ -1914,12 +1983,15 @@ const buildMemberLocationMap = (circlePayload: any, members: CircleMember[]): Re
     }
     const ownerId = resolveLocationOwnerId(raw as Record<string, unknown>, members, nameLookup);
     if (!ownerId) {
+      console.log("buildMemberLocationMap: Could not resolve owner for location:", raw);
       continue;
     }
     const coords = extractCoordinatesFromCandidate(raw);
     if (!coords || !Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) {
+      console.log("buildMemberLocationMap: Invalid coords for owner", ownerId, ":", coords);
       continue;
     }
+    console.log("buildMemberLocationMap: Adding location for", ownerId, ":", coords);
     map[ownerId] = coords;
   }
 
@@ -1930,10 +2002,14 @@ const buildMemberLocationMap = (circlePayload: any, members: CircleMember[]): Re
     }
     const directLocation = extractLocationFromMemberRecord(member);
     if (directLocation && Number.isFinite(directLocation.latitude) && Number.isFinite(directLocation.longitude)) {
+      console.log("buildMemberLocationMap: Adding direct location for", memberId, ":", directLocation);
       map[memberId] = directLocation;
+    } else {
+      console.log("buildMemberLocationMap: No valid direct location for", memberId);
     }
   });
 
+  console.log("buildMemberLocationMap: Final map has", Object.keys(map).length, "locations");
   return map;
 };
 
@@ -1946,6 +2022,16 @@ const isValidCoordinate = (lat: number, lon: number) => {
 const ROLE_OPTIONS = [
   { value: "member", label: "Member" },
   { value: "admin", label: "Admin" },
+];
+
+const RELATION_OPTIONS = [
+  { value: "Mom", label: "Mom" },
+  { value: "Dad", label: "Dad" },
+  { value: "Son/ Daughter/Child", label: "Son/ Daughter/Child" },
+  { value: "Grandparent", label: "Grandparent" },
+  { value: "Partner/Spouse", label: "Partner/Spouse" },
+  { value: "Friend", label: "Friend" },
+  { value: "Other", label: "Other" },
 ];
 
 const normalizeRole = (role?: string | null) => {
@@ -2090,6 +2176,7 @@ const MapScreen: React.FC = () => {
   // Member Journeys Modal State
   const [isMemberJourneysModalOpen, setIsMemberJourneysModalOpen] = useState(false);
   const [selectedMemberForJourneys, setSelectedMemberForJourneys] = useState<string | number | undefined>(undefined);
+  const [isMyRoleModalOpen, setIsMyRoleModalOpen] = useState(false);
 
   // Circles Modal Share State
 
@@ -2114,6 +2201,7 @@ const MapScreen: React.FC = () => {
   const [memberBeingEdited, setMemberBeingEdited] = useState<CircleMember | null>(null);
   const [editedMemberRole, setEditedMemberRole] = useState("member");
   const [editedMemberNickname, setEditedMemberNickname] = useState("");
+  const [editedMemberRelation, setEditedMemberRelation] = useState("Other");
   const [isSavingMemberChanges, setIsSavingMemberChanges] = useState(false);
   const [memberModalError, setMemberModalError] = useState<string | null>(null);
   const [isMapStyleModalOpen, setIsMapStyleModalOpen] = useState(false);
@@ -2680,6 +2768,15 @@ const MapScreen: React.FC = () => {
 
       const payload = await response.json().catch(() => ({}));
       console.log("DEBUG: GET /api/circles/{id} payload:", JSON.stringify(payload, null, 2));
+
+      // Log specifically the members array
+      if (payload?.data?.members) {
+        console.log("DEBUG: data.members array found with", payload.data.members.length, "members");
+        console.log("DEBUG: First member:", JSON.stringify(payload.data.members[0], null, 2));
+      } else {
+        console.log("DEBUG: ⚠️ No data.members array in response!");
+      }
+
       if (!response.ok) {
         console.warn("Failed to load circle members", payload?.message);
         return;
@@ -2716,9 +2813,13 @@ const MapScreen: React.FC = () => {
 
 
       const locationMap = buildMemberLocationMap(circlePayload, members);
+      console.log("fetchCircleMembers locationMap built:", JSON.stringify(locationMap, null, 2));
+      console.log("fetchCircleMembers locationMap keys:", Object.keys(locationMap));
+      console.log("fetchCircleMembers locationMap count:", Object.keys(locationMap).length);
 
       setMemberAvatarUrls(avatarMap);
       setMemberLocations(locationMap);
+      console.log("fetchCircleMembers setMemberLocations called with", Object.keys(locationMap).length, "locations");
 
       if (currentUserId) {
         const selfMember = members.find((member) => resolveMemberId(member) === currentUserId);
@@ -4082,17 +4183,18 @@ const MapScreen: React.FC = () => {
       if (!member) return false;
       const memberId = resolveMemberId(member);
       if (!memberId) return false;
+      if (memberId === currentUserId) return false; // Cannot edit own role
+
       const memberRole = normalizeRole(member.Membership?.role);
 
       if (isCircleCreator) {
-        // creator can change and edit admins and members
+        // Creator can change anyone who is an admin or member
         return memberRole === "admin" || memberRole === "member";
       }
 
       if (currentMembershipRole === "admin") {
-        // Admins can change creator and Members Details
-        if (memberId === currentUserId) return false;
-        return memberRole === "creator" || memberRole === "member";
+        // Admins can change anyone who is an admin or member
+        return memberRole === "admin" || memberRole === "member";
       }
 
       return false;
@@ -4105,16 +4207,18 @@ const MapScreen: React.FC = () => {
       if (!member) return false;
       const memberId = resolveMemberId(member);
       if (!memberId) return false;
+      if (memberId === currentUserId) return true; // Can always edit own nickname
+
       const memberRole = normalizeRole(member.Membership?.role);
 
       if (isCircleCreator) {
-        // creator can change and edit admins and members
-        return memberRole === "admin" || memberRole === "member" || memberId === currentUserId;
+        // Creator can edit nicknames for admins and members
+        return memberRole === "admin" || memberRole === "member";
       }
 
       if (currentMembershipRole === "admin") {
-        // Admins can change creator and Members Details
-        return memberRole === "creator" || memberRole === "member" || memberId === currentUserId;
+        // Admins can edit nicknames for other admins and members
+        return memberRole === "admin" || memberRole === "member";
       }
 
       return false;
@@ -4283,6 +4387,7 @@ const MapScreen: React.FC = () => {
     setMemberBeingEdited(member);
     setEditedMemberRole(normalizeRole(member.Membership?.role) || 'member');
     setEditedMemberNickname(member.Membership?.nickname || '');
+    setEditedMemberRelation(member.Membership?.metadata?.relation || 'Other');
     setSelectedMemberLocationId(resolveMembershipLocationId(member));
     setMemberModalError(null);
     setIsEditMemberModalOpen(true);
@@ -4293,6 +4398,7 @@ const MapScreen: React.FC = () => {
     setMemberBeingEdited(null);
     setEditedMemberRole('member');
     setEditedMemberNickname('');
+    setEditedMemberRelation('Other');
     setSelectedMemberLocationId(null);
     setMemberModalError(null);
   }, []);
@@ -4322,6 +4428,12 @@ const MapScreen: React.FC = () => {
       const currentNickname = memberBeingEdited.Membership?.nickname || '';
       if (canEditNicknameInModal && editedMemberNickname !== currentNickname) {
         updates.nickname = editedMemberNickname;
+      }
+
+      // Update relation if changed
+      const currentRelation = memberBeingEdited.Membership?.metadata?.relation || 'Other';
+      if (editedMemberRelation !== currentRelation) {
+        updates.metadata = { ...(memberBeingEdited.Membership?.metadata || {}), relation: editedMemberRelation };
       }
 
       // Update location assignment if changed
@@ -4368,11 +4480,51 @@ const MapScreen: React.FC = () => {
     canEditNicknameInModal,
     editedMemberRole,
     editedMemberNickname,
+    editedMemberRelation,
     selectedMemberLocationId,
     fetchCircleMembers,
     showAlert,
     closeEditMemberModal,
   ]);
+
+  const handleUpdateMyRelation = useCallback(async (newRelation: string) => {
+    if (!selectedCircle || !currentMembership) return;
+
+    const memberId = resolveMemberId(currentMembership);
+    if (!memberId) return;
+
+    try {
+      const updates = {
+        metadata: {
+          ...(currentMembership.Membership?.metadata || {}),
+          relation: newRelation,
+        },
+      };
+
+      const response = await authenticatedFetch(
+        `${API_BASE_URL}/circles/${selectedCircle.id}/members/${memberId}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            accept: 'application/json',
+          },
+          body: JSON.stringify(updates),
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.message ?? 'Failed to update relation');
+      }
+
+      await fetchCircleMembers(selectedCircle.id);
+      showAlert({ title: 'Success', message: 'Relation updated successfully', type: 'success' });
+      setIsMyRoleModalOpen(false);
+    } catch (error: any) {
+      showAlert({ title: 'Error', message: error.message || 'Failed to update relation', type: 'error' });
+    }
+  }, [selectedCircle, currentMembership, fetchCircleMembers, showAlert]);
 
   const handleStartInviteFlow = () => {
     if (!selectedCircle) {
@@ -5301,6 +5453,8 @@ const MapScreen: React.FC = () => {
   //     setLocationHistoryLoading(false);
   //   }
   // };
+
+
   const renderMemberMarker = (
     memberId: string | null,
     coordinate: UserLocation | null | undefined,
@@ -5310,153 +5464,215 @@ const MapScreen: React.FC = () => {
       return null;
     }
 
-    const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
     const memberRecord = memberId ? circleMembersById.get(memberId) : undefined;
-
     const displayName = isCurrentUser
       ? userDisplayName || "You"
-      : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Circle member";
+      : (memberRecord as any)?.Membership?.nickname || memberRecord?.name || (memberRecord as any)?.email || "Circle member";
 
-    if (memberRecord) {
-      console.log(`[MarkerRecord] ${displayName} battery:`, JSON.stringify(memberRecord));
+    const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
+    const fallbackSeed = (memberRecord as any)?.email ?? memberRecord?.name ?? (memberRecord as any)?.Membership?.nickname ?? safeMemberId ?? displayName ?? "member";
+    const avatarCandidate = isCurrentUser ? currentUserAvatarUrl : memberId ? memberAvatarUrls[memberId] : null;
+    let resolvedAvatar = typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0 ? avatarCandidate.trim() : null;
+
+    if (resolvedAvatar && resolvedAvatar.startsWith("/")) {
+      resolvedAvatar = `${API_BASE_URL}${resolvedAvatar}`;
     }
-    const fallbackSeed =
-      memberRecord?.email ??
-      memberRecord?.name ??
-      memberRecord?.Membership?.nickname ??
-      safeMemberId ??
-      displayName ??
-      "member";
-    const avatarCandidate = isCurrentUser
-      ? currentUserAvatarUrl
-      : memberId
-        ? memberAvatarUrls[memberId]
-        : null;
-
-    let tempAvatar = null;
-    if (typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0) {
-      const trimmed = avatarCandidate.trim();
-      if (trimmed.startsWith("http") || trimmed.startsWith("file:")) {
-        tempAvatar = trimmed;
-      } else {
-        const relative = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-        tempAvatar = `${API_BASE_URL}${relative}`.replace("/api/uploads", "/uploads");
-      }
+    if (resolvedAvatar) {
+      resolvedAvatar = resolvedAvatar.replace("/api/uploads", "/uploads");
     }
-
-    const resolvedAvatar = tempAvatar ?? `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
+    resolvedAvatar = resolvedAvatar ?? `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
 
     const memberBatteryInfo = memberRecord?.batteryLevel ?? null;
-    const effectiveBatteryInfo = isCurrentUser
-      ? currentUserBatteryLevel ?? memberBatteryInfo
-      : memberBatteryInfo;
-    const batteryPercent = (() => {
-      if (effectiveBatteryInfo) {
-        console.log(`[MarkerBattery] ${displayName} info:`, JSON.stringify(effectiveBatteryInfo));
-      }
-      return effectiveBatteryInfo && typeof effectiveBatteryInfo.batteryLevel === "number" && Number.isFinite(effectiveBatteryInfo.batteryLevel)
-        ? Math.max(0, Math.min(100, Math.round(effectiveBatteryInfo.batteryLevel)))
-        : null;
+    const effectiveBatteryInfo = isCurrentUser ? currentUserBatteryLevel ?? memberBatteryInfo : memberBatteryInfo;
+    const batteryValue = (function () {
+      const match = coordinate?.battery?.match(/(\d+)/);
+      if (match) return parseInt(match[1], 10);
+      if (effectiveBatteryInfo?.batteryLevel != null) return Math.round(effectiveBatteryInfo.batteryLevel);
+      return 100;
     })();
 
-    const markerKey = safeMemberId
-      ? `member-marker-${safeMemberId}`
-      : `member-marker-${Math.round(coordinate.latitude * 1e6)}-${Math.round(coordinate.longitude * 1e6)}`;
-
-    const markerLabel = isCurrentUser ? "You" : displayName;
-    const initialsSource = displayName || fallbackSeed;
-
     return (
-      <Marker
-        key={markerKey}
-        coordinate={{ latitude: coordinate.latitude, longitude: coordinate.longitude }}
-        anchor={{ x: 0.5, y: 1 }}
-        title={displayName}
-        zIndex={isCurrentUser ? 3 : 2}
-        onPress={() => {
-          const isReallyCurrentUser = isCurrentUser || (currentUserId && memberId === currentUserId);
-          if (isReallyCurrentUser) {
-            return;
-          }
-          if (memberRecord) {
-            handleOpenMemberJourneysModal(memberRecord);
-          }
-        }}
-      >
-        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-          {/* Avatar Circle */}
-          <View style={{
-            width: 33,
-            height: 33,
-            borderRadius: 28,
-            borderWidth: 3,
-            borderColor: isCurrentUser ? "#2563EB" : "#22C55E",
-            backgroundColor: 'white',
-            overflow: 'hidden',
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.3,
-            shadowRadius: 3,
-            elevation: 5,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-            <Image
-              source={{ uri: resolvedAvatar }}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode="cover"
-            />
-          </View>
-
-          {/* Pointer Triangle */}
-          <View style={{
-            width: 0,
-            height: 0,
-            backgroundColor: 'transparent',
-            borderStyle: 'solid',
-            borderLeftWidth: 6,
-            borderRightWidth: 6,
-            borderTopWidth: 8,
-            borderLeftColor: 'transparent',
-            borderRightColor: 'transparent',
-            borderTopColor: isCurrentUser ? "#2563EB" : "#22C55E",
-            marginTop: -2,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.2,
-            shadowRadius: 1,
-            elevation: 2,
-          }} />
-
-          {/* Battery Badge */}
-          {batteryPercent !== null && (
-            <View style={{
-              position: 'absolute',
-              top: -4,
-              right: -4,
-              backgroundColor: 'white',
-              borderRadius: 10,
-              borderWidth: 2,
-              borderColor: isCurrentUser ? "#2563EB" : "#22C55E",
-              paddingHorizontal: 4,
-              paddingVertical: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              elevation: 6,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: 0.2,
-              shadowRadius: 1,
-            }}>
-              <Text style={{ fontSize: 9, fontWeight: '800', color: 'black' }}>
-                {batteryPercent}%
-              </Text>
-            </View>
-          )}
-        </View>
-      </Marker>
+      <MemberMarker
+        key={safeMemberId ? `member-marker-${safeMemberId}` : `marker-${coordinate.latitude}-${coordinate.longitude}`}
+        memberId={memberId}
+        coordinate={coordinate}
+        displayName={displayName}
+        avatarUrl={resolvedAvatar}
+        batteryLevel={batteryValue}
+        isCurrentUser={isCurrentUser}
+        relation={(memberRecord as any)?.Membership?.metadata?.relation}
+        onPress={() => !isCurrentUser && memberRecord && handleOpenMemberJourneysModal(memberRecord)}
+      />
     );
   };
+
+  // Helper to keep the render function clean
+  const getBatteryIconName = (val: number | null) => {
+    if (val === null) return "battery-unknown";
+    if (val >= 95) return "battery";
+    const levels = [90, 80, 70, 60, 50, 40, 30, 20, 10];
+    for (const l of levels) { if (val >= l - 5) return `battery-${l}`; }
+    return "battery-10";
+  };
+
+
+
+  // const renderMemberMarker = (
+  //   memberId: string | null,
+  //   coordinate: UserLocation | null | undefined,
+  //   isCurrentUser: boolean
+  // ): React.ReactElement | null => {
+  //   if (!coordinate || !isValidCoordinate(coordinate.latitude, coordinate.longitude)) {
+  //     return null;
+  //   }
+
+  //   const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
+  //   const memberRecord = memberId ? circleMembersById.get(memberId) : undefined;
+
+  //   const displayName = isCurrentUser
+  //     ? userDisplayName || "You"
+  //     : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Circle member";
+
+  //   if (memberRecord) {
+  //     console.log(`[MarkerRecord] ${displayName} battery:`, JSON.stringify(memberRecord));
+  //   }
+  //   const fallbackSeed =
+  //     memberRecord?.email ??
+  //     memberRecord?.name ??
+  //     memberRecord?.Membership?.nickname ??
+  //     safeMemberId ??
+  //     displayName ??
+  //     "member";
+  //   const avatarCandidate = isCurrentUser
+  //     ? currentUserAvatarUrl
+  //     : memberId
+  //       ? memberAvatarUrls[memberId]
+  //       : null;
+
+  //   let tempAvatar = null;
+  //   if (typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0) {
+  //     const trimmed = avatarCandidate.trim();
+  //     if (trimmed.startsWith("http") || trimmed.startsWith("file:")) {
+  //       tempAvatar = trimmed;
+  //     } else {
+  //       const relative = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  //       tempAvatar = `${API_BASE_URL}${relative}`.replace("/api/uploads", "/uploads");
+  //     }
+  //   }
+
+  //   const resolvedAvatar = tempAvatar ?? `${DEFAULT_MEMBER_AVATAR}${encodeURIComponent(fallbackSeed)}`;
+
+  //   const memberBatteryInfo = memberRecord?.batteryLevel ?? null;
+  //   const effectiveBatteryInfo = isCurrentUser
+  //     ? currentUserBatteryLevel ?? memberBatteryInfo
+  //     : memberBatteryInfo;
+  //   const batteryPercent = (() => {
+  //     if (effectiveBatteryInfo) {
+  //       console.log(`[MarkerBattery] ${displayName} info:`, JSON.stringify(effectiveBatteryInfo));
+  //     }
+  //     return effectiveBatteryInfo && typeof effectiveBatteryInfo.batteryLevel === "number" && Number.isFinite(effectiveBatteryInfo.batteryLevel)
+  //       ? Math.max(0, Math.min(100, Math.round(effectiveBatteryInfo.batteryLevel)))
+  //       : null;
+  //   })();
+
+  //   const markerKey = safeMemberId
+  //     ? `member-marker-${safeMemberId}`
+  //     : `member-marker-${Math.round(coordinate.latitude * 1e6)}-${Math.round(coordinate.longitude * 1e6)}`;
+
+  //   const markerLabel = isCurrentUser ? "You" : displayName;
+  //   const initialsSource = displayName || fallbackSeed;
+
+  //   return (
+  //     <Marker
+  //       key={markerKey}
+  //       coordinate={{ latitude: coordinate.latitude, longitude: coordinate.longitude }}
+  //       anchor={{ x: 0.5, y: 1 }}
+  //       title={displayName}
+  //       zIndex={isCurrentUser ? 3 : 2}
+  //       onPress={() => {
+  //         const isReallyCurrentUser = isCurrentUser || (currentUserId && memberId === currentUserId);
+  //         if (isReallyCurrentUser) {
+  //           return;
+  //         }
+  //         if (memberRecord) {
+  //           handleOpenMemberJourneysModal(memberRecord);
+  //         }
+  //       }}
+  //     >
+  //       <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+  //         {/* Avatar Circle */}
+  //         <View style={{
+  //           width: 33,
+  //           height: 33,
+  //           borderRadius: 28,
+  //           borderWidth: 3,
+  //           borderColor: isCurrentUser ? "#2563EB" : "#22C55E",
+  //           backgroundColor: 'white',
+  //           overflow: 'hidden',
+  //           shadowColor: "#000",
+  //           shadowOffset: { width: 0, height: 2 },
+  //           shadowOpacity: 0.3,
+  //           shadowRadius: 3,
+  //           elevation: 5,
+  //           alignItems: 'center',
+  //           justifyContent: 'center',
+  //         }}>
+  //           <Image
+  //             source={{ uri: resolvedAvatar }}
+  //             style={{ width: '100%', height: '100%' }}
+  //             resizeMode="cover"
+  //           />
+  //         </View>
+
+  //         {/* Pointer Triangle */}
+  //         <View style={{
+  //           width: 0,
+  //           height: 0,
+  //           backgroundColor: 'transparent',
+  //           borderStyle: 'solid',
+  //           borderLeftWidth: 6,
+  //           borderRightWidth: 6,
+  //           borderTopWidth: 8,
+  //           borderLeftColor: 'transparent',
+  //           borderRightColor: 'transparent',
+  //           borderTopColor: isCurrentUser ? "#2563EB" : "#22C55E",
+  //           marginTop: -2,
+  //           shadowColor: '#000',
+  //           shadowOffset: { width: 0, height: 1 },
+  //           shadowOpacity: 0.2,
+  //           shadowRadius: 1,
+  //           elevation: 2,
+  //         }} />
+
+  //         {/* Battery Badge */}
+  //         {batteryPercent !== null && (
+  //           <View style={{
+  //             position: 'absolute',
+  //             top: -4,
+  //             right: -4,
+  //             backgroundColor: 'white',
+  //             borderRadius: 10,
+  //             borderWidth: 2,
+  //             borderColor: isCurrentUser ? "#2563EB" : "#22C55E",
+  //             paddingHorizontal: 4,
+  //             paddingVertical: 1,
+  //             alignItems: 'center',
+  //             justifyContent: 'center',
+  //             elevation: 6,
+  //             shadowColor: "#000",
+  //             shadowOffset: { width: 0, height: 1 },
+  //             shadowOpacity: 0.2,
+  //             shadowRadius: 1,
+  //           }}>
+  //             <Text style={{ fontSize: 9, fontWeight: '800', color: 'black' }}>
+  //               {batteryPercent}%
+  //             </Text>
+  //           </View>
+  //         )}
+  //       </View>
+  //     </Marker>
+  //   );
+  // };
 
   const hasMemberLocationForCurrentUser = Boolean(currentUserId && memberLocations[currentUserId]);
 
@@ -5482,6 +5698,25 @@ const MapScreen: React.FC = () => {
           showsUserLocation={false}
           showsCompass={false}
           showsMyLocationButton={false}
+          onRegionChangeComplete={(region) => {
+            if (region.latitudeDelta < 0.02) {
+              if (mapLayerStyle !== 'satellite') {
+                setMapLayerStyle('satellite');
+              }
+            } else {
+              // Only switch back to standard if we are currently in satellite auto-switch mode
+              // But since we don't track "auto-switch mode", we'll just switch back to standard
+              // if the current style is satellite. 
+              // This effectively makes 'satellite' only available at high zoom levels unless we add more complex state.
+              // For now, I'll follow the request literally: change to satellite when zoom 50% (zoomed in).
+              // Implicitly, switch back when zoomed out? 
+              // If I don't switch back, it stays satellite forever after one zoom in. 
+              // Usually these features toggle back.
+              if (mapLayerStyle === 'satellite') {
+                setMapLayerStyle('standard');
+              }
+            }
+          }}
         >
           {location && userAccuracyRadius ? (
             <Circle
@@ -5542,46 +5777,22 @@ const MapScreen: React.FC = () => {
               currentUserAssignedLocationId !== null && normalizedId !== null && normalizedId === currentUserAssignedLocationId;
 
             const assignedSubtitle = isAssignedToCurrentUser ? "Assigned to you" : undefined;
-
-            const circleStrokeColor = isAssignedToCurrentUser
-              ? ASSIGNED_LOCATION_STROKE_COLOR
-              : "rgba(239, 68, 68, 0.6)";
-            const circleFillColor = isAssignedToCurrentUser
-              ? ASSIGNED_LOCATION_FILL_COLOR
-              : "rgba(239, 68, 68, 0.15)";
             const calloutDescription = assignedSubtitle
               ? markerDescription
                 ? `${markerDescription}\n${assignedSubtitle}`
                 : assignedSubtitle
               : markerDescription;
 
-            return [
-              <Circle
-                key={circleKey}
-                center={{ latitude: loc.latitude, longitude: loc.longitude }}
-                radius={circleRadius}
-                strokeColor={circleStrokeColor}
-                fillColor={circleFillColor}
-                strokeWidth={2}
-              />,
-              <Marker
-                key={markerNodeKey}
-                identifier={markerKey}
+            return (
+              <LocationMarker
+                key={markerKey}
                 coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
                 title={markerTitle}
                 description={calloutDescription}
-                zIndex={isAssignedToCurrentUser ? 2 : 1}
-                anchor={{ x: 0.5, y: 1 }}
-
-
-              >
-                <Ionicons
-                  name="location-sharp"
-                  size={isAssignedToCurrentUser ? 30 : 34}
-                  color={isAssignedToCurrentUser ? "#FACC15" : "#EF4444"}
-                />
-              </Marker>,
-            ];
+                radius={circleRadius}
+                isAssignedToCurrentUser={isAssignedToCurrentUser}
+              />
+            );
           })}
 
           {fallbackAssignedMarker
@@ -5787,7 +5998,7 @@ const MapScreen: React.FC = () => {
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A' }}>{displayName}</Text>
                         <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 2 }}>
-                          {roleLabel} {/* In real app we would put location text here */}
+                          {roleLabel} {member.Membership?.metadata?.relation ? `• ${member.Membership.metadata.relation}` : ''}
                         </Text>
                       </View>
 
@@ -5926,7 +6137,7 @@ const MapScreen: React.FC = () => {
                             </View>
                             <View style={styles.savedPlaceTextWrapper}>
                               <Text style={styles.savedPlaceName}>{label}</Text>
-                              <Text style={styles.savedPlaceCoords}>{subtitle}</Text>
+                              {/* <Text style={styles.savedPlaceCoords}>{subtitle}</Text>  */}
                               {isAssignedToCurrentUser ? (
                                 <View style={styles.assignedBadge}>
                                   <Ionicons name="star" size={12} color={COLORS.primary} />
@@ -6604,7 +6815,7 @@ const MapScreen: React.FC = () => {
                   </Text>
                 ) : null}
 
-                <Text style={styles.memberModalLabel}>Role</Text>
+                <Text style={styles.memberModalLabel}>Member Type</Text>
                 <View style={styles.roleOptionsRow}>
                   {ROLE_OPTIONS.map((option, index) => {
                     const isSelected = editedMemberRole === option.value;
@@ -6629,6 +6840,32 @@ const MapScreen: React.FC = () => {
                             styles.roleOptionText,
                             isSelected && styles.roleOptionTextSelected,
                             isDisabled && styles.roleOptionTextDisabled,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <Text style={styles.memberModalLabel}>Role</Text>
+                <View style={styles.relationOptionsRow}>
+                  {RELATION_OPTIONS.map((option) => {
+                    const isSelected = editedMemberRelation === option.value;
+                    return (
+                      <TouchableOpacity
+                        key={option.value}
+                        style={[
+                          styles.relationOptionChip,
+                          isSelected && styles.relationOptionChipSelected,
+                        ]}
+                        onPress={() => setEditedMemberRelation(option.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.relationOptionText,
+                            isSelected && styles.relationOptionTextSelected,
                           ]}
                         >
                           {option.label}
@@ -6786,8 +7023,13 @@ const MapScreen: React.FC = () => {
           circleName={selectedCircle?.name}
           mode={addPlaceMode}
           editingLocation={editingLocation}
-          // The AddPlaceModal is a simplified version so onPlaceSaved might not be triggered yet
-          // but we prepare for its integration.
+          members={selectedCircleMembers}
+          memberLocations={memberLocations}
+          savedPlaces={currentLocations}
+          currentUserId={currentUserId}
+          currentUserAvatarUrl={currentUserAvatarUrl}
+          currentUserBatteryLevel={currentUserBatteryLevel}
+          memberAvatarUrls={memberAvatarUrls}
           onPlaceSaved={() => {
             loadCircles(true);
             setIsAddPlaceModalOpen(false);
@@ -6821,7 +7063,13 @@ const MapScreen: React.FC = () => {
           onClose={() => setIsCreateCircleModalOpen(false)}
           onCreate={async (name) => {
             try {
-              await handleCreateCircleAction(name);
+              const result = await handleCreateCircleAction(name);
+              const newCircleId = result?.data?.id ?? result?.id ?? result?.data?.circle?.id;
+
+              if (newCircleId) {
+                await AsyncStorage.setItem(STORAGE_KEYS.lastSelectedCircleId, String(newCircleId)).catch(() => undefined);
+              }
+
               await requestCirclesRefresh();
               setIsCreateCircleModalOpen(false);
               showAlert({ title: "Success", message: "Circle created successfully!", type: 'success' });
@@ -6836,7 +7084,13 @@ const MapScreen: React.FC = () => {
           onClose={() => setIsJoinCircleModalOpen(false)}
           onJoin={async (pin) => {
             try {
-              await handleJoinCircleAction(pin);
+              const result = await handleJoinCircleAction(pin);
+              const newCircleId = result?.data?.id ?? result?.id ?? result?.data?.circle?.id;
+
+              if (newCircleId) {
+                await AsyncStorage.setItem(STORAGE_KEYS.lastSelectedCircleId, String(newCircleId)).catch(() => undefined);
+              }
+
               await requestCirclesRefresh();
               setIsJoinCircleModalOpen(false);
               showAlert({ title: "Success", message: "Joined circle successfully!", type: 'success' });
@@ -6882,14 +7136,18 @@ const MapScreen: React.FC = () => {
           circleId={selectedCircle?.id}
           circleName={selectedCircle?.name}
           userRole={currentMembershipRole ?? "Member"}
-          onOpenAdminManagement={() => {
+          onOpenAdminManagement={(type?: string) => {
             setIsCircleManagementModalOpen(false);
-            // In NearU, admin management is done per member in the bottom sheet list.
-            // We can scroll to the members section as a way to "manage" them.
-            scrollToSection('members');
-            setActiveSection('members');
-            snapTo(MAX_HEIGHT);
-            setIsExpanded(true);
+            if (type === 'my-role') {
+              setIsMyRoleModalOpen(true);
+            } else {
+              // In NearU, admin management is done per member in the bottom sheet list.
+              // We can scroll to the members section as a way to "manage" them.
+              scrollToSection('members');
+              setActiveSection('members');
+              snapTo(MAX_HEIGHT);
+              setIsExpanded(true);
+            }
           }}
           onOpenEditCircle={() => {
             setIsCircleManagementModalOpen(false);
@@ -6927,6 +7185,7 @@ const MapScreen: React.FC = () => {
           onClose={() => setIsSosModalOpen(false)}
           circleId={selectedCircle?.id}
           circleName={selectedCircle?.name}
+          members={selectedCircleMembers}
         />
 
         <AddPeopleModal
@@ -6934,6 +7193,14 @@ const MapScreen: React.FC = () => {
           onClose={() => setIsAddPeopleModalOpen(false)}
           circleId={selectedCircle?.id}
           circleName={selectedCircle?.name}
+        />
+
+        <MyRoleModal
+          isOpen={isMyRoleModalOpen}
+          onClose={() => setIsMyRoleModalOpen(false)}
+          userRole={currentMembershipRole ?? "Member"}
+          userRelation={currentMembership?.Membership?.metadata?.relation}
+          onSaveRelation={handleUpdateMyRelation}
         />
 
       </View>
@@ -7855,6 +8122,35 @@ const styles = StyleSheet.create({
   roleOptionTextDisabled: {
     color: COLORS.gray,
   },
+  relationOptionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 16,
+  },
+  relationOptionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.white,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  relationOptionChipSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: '#F3F0FF',
+  },
+  relationOptionText: {
+    fontSize: 13,
+    color: COLORS.black,
+    fontWeight: '600',
+  },
+  relationOptionTextSelected: {
+    color: COLORS.primary,
+  },
   memberModalInput: {
     borderWidth: 1,
     borderColor: '#E5E7EB',
@@ -7952,4 +8248,102 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.white,
   },
+
+
+
+
+  markerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeBadge: {
+    borderRadius: 10,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: 'white',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 1.5,
+    minHeight: 16,
+    position: 'absolute',
+    top: -4,
+    right: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 20,
+    zIndex: 10,
+  },
+  timeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: 'white',
+  },
+  avatarCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 4,
+    borderWidth: 1,
+    backgroundColor: 'white',
+    overflow: 'hidden',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pointerTriangle: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 2,
+    borderRightWidth: 2,
+    borderTopWidth: 3,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    marginTop: -2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1,
+    elevation: 2,
+  },
+  batteryBadgeContainer: {
+    position: 'absolute',
+    top: -6,
+    right: -5,
+    backgroundColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 20,
+    zIndex: 10,
+  },
+  batteryBadgeInner: {
+    backgroundColor: 'transparent',
+    paddingHorizontal: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  batteryIcon: {
+    margin: 0,
+    transform: [{ rotate: '90deg' }],
+  },
+  batteryText: {
+    position: 'absolute',
+    fontWeight: '900',
+    color: COLORS.black, // Ensure COLORS is defined in your theme
+    textAlign: 'center',
+    backgroundColor: 'white',
+    borderRadius: 2,
+  },
+
 });

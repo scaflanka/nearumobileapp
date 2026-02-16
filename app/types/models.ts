@@ -25,6 +25,8 @@ export interface UserLocation {
   heading?: number;
   accuracy?: number | null;
   speed?: number | null;
+  battery?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface JourneyHistoryPoint {

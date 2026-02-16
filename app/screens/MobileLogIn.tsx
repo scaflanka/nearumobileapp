@@ -1,4 +1,6 @@
 import { API_BASE_URL } from '@/utils/auth';
+import GoogleAuthService from '@/utils/googleAuth';
+import { flushPendingFcmToken, persistFcmToken, registerDeviceAndGetFCMToken } from '@/utils/permissions';
 import { AntDesign } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -14,6 +16,7 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
+
 import CountryPicker, { Country, CountryCode } from 'react-native-country-picker-modal';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAlert } from '../context/AlertContext'; // Added
@@ -70,6 +73,11 @@ const MobileLogInScreen = () => {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    GoogleAuthService.configure();
+  }, []);
+
 
   useEffect(() => {
     if (rawPrefixParam) {
@@ -155,6 +163,33 @@ const MobileLogInScreen = () => {
       setLoading(false);
     }
   };
+
+  const handleGoogleLogin = async () => {
+    setErrorMessage(null);
+    setInfoMessage(null);
+    setLoading(true);
+    try {
+      const user = await GoogleAuthService.signIn();
+      if (user) {
+        try {
+          await flushPendingFcmToken();
+          const fcmToken = await registerDeviceAndGetFCMToken();
+          if (fcmToken) {
+            await persistFcmToken(fcmToken);
+          }
+        } catch (error) {
+          console.error('Error registering FCM token after login:', error);
+        }
+        router.replace('/screens/MapScreen');
+      }
+    } catch (error: any) {
+      console.error('Google login error', error);
+      setErrorMessage(error.message || 'An error occurred during Google sign in');
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   return (
     <SafeAreaView style={styles.container} edges={['right', 'left', 'top']}>
@@ -260,7 +295,8 @@ const MobileLogInScreen = () => {
             <View style={styles.divider} />
           </View>
 
-          <TouchableOpacity style={styles.socialButton} onPress={() => {/* Handle Google Login */ }}>
+          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleLogin}>
+
             <Image
               source={require('../../assets/images/google-logo.png')}
               style={styles.socialIcon}
