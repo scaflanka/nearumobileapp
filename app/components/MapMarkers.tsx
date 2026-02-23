@@ -1,7 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import React from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
-import { Circle, Marker } from "react-native-maps";
+import { Marker } from "react-native-maps";
 
 const COLORS = {
     primary: "#113C9C",
@@ -24,7 +24,7 @@ interface MemberMarkerProps {
     onPress?: () => void;
 }
 
-export const MemberMarker: React.FC<MemberMarkerProps> = ({
+export const MemberMarker: React.FC<MemberMarkerProps> = React.memo(({
     memberId,
     coordinate,
     displayName,
@@ -34,6 +34,14 @@ export const MemberMarker: React.FC<MemberMarkerProps> = ({
     relation,
     onPress,
 }) => {
+    const [tracksView, setTracksView] = React.useState(true);
+
+    React.useEffect(() => {
+        // Stop tracking view changes after a short delay to allow initial render
+        const timer = setTimeout(() => setTracksView(false), 1000);
+        return () => clearTimeout(timer);
+    }, [avatarUrl, displayName]); // Re-track if major visuals change
+
     const getBatteryIconName = (val: number | null) => {
         if (val === null) return "battery-unknown";
         if (val >= 95) return "battery";
@@ -55,6 +63,7 @@ export const MemberMarker: React.FC<MemberMarkerProps> = ({
             title={markerTitle}
             zIndex={isCurrentUser ? 3 : 2}
             onPress={onPress}
+            tracksViewChanges={tracksView}
         >
             <View style={styles.markerContainer}>
                 <View style={[styles.avatarCircle, { borderColor: accentColor }]}>
@@ -83,13 +92,15 @@ export const MemberMarker: React.FC<MemberMarkerProps> = ({
             </View>
         </Marker>
     );
-};
+});
 
 interface LocationMarkerProps {
     coordinate: { latitude: number; longitude: number };
     title: string;
     description?: string;
     radius: number;
+    placeType?: string | null;
+    locationType?: string | null;
     isAssignedToCurrentUser?: boolean;
     onPress?: () => void;
 }
@@ -102,6 +113,8 @@ export const LocationMarker: React.FC<LocationMarkerProps> = ({
     title,
     description,
     radius,
+    placeType,
+    locationType,
     isAssignedToCurrentUser,
     onPress,
 }) => {
@@ -114,27 +127,56 @@ export const LocationMarker: React.FC<LocationMarkerProps> = ({
 
     return (
         <>
-            <Circle
+            {/* <Circle
                 center={coordinate}
                 radius={radius}
                 strokeColor={circleStrokeColor}
                 fillColor={circleFillColor}
                 strokeWidth={2}
-            />
-            <Marker
-                coordinate={coordinate}
-                title={title}
-                description={description}
-                zIndex={isAssignedToCurrentUser ? 2 : 1}
-                anchor={{ x: 0.5, y: 1 }}
-                onPress={onPress}
-            >
-                <Ionicons
-                    name="location-sharp"
-                    size={isAssignedToCurrentUser ? 30 : 34}
-                    color={isAssignedToCurrentUser ? "#FACC15" : "#EF4444"}
-                />
-            </Marker>
+            /> */}
+
+            {/* Helper to pick icon based on placeType */}
+            {(() => {
+                const getIconName = (type?: string | null) => {
+                    const normalized = type?.trim().toLowerCase();
+                    switch (normalized) {
+                        case 'home': return 'home';
+                        case 'office': return 'briefcase';
+                        case 'school': return 'school';
+                        case 'gym': return 'fitness';
+                        case 'hotel': return 'bed';
+                        case 'ground': return 'map';
+                        case 'business': return 'business';
+                        case 'center': return 'location';
+                        default: return 'location-sharp';
+                    }
+                };
+
+                const iconName = getIconName(locationType || placeType);
+                const accentColor = isAssignedToCurrentUser ? '#FACC15' : '#EF4444';
+
+                return (
+                    <Marker
+                        coordinate={coordinate}
+                        title={title}
+                        description={description}
+                        zIndex={isAssignedToCurrentUser ? 2 : 1}
+                        anchor={{ x: 0.5, y: 1 }}
+                        onPress={onPress}
+                    >
+                        <View style={styles.markerContainer}>
+                            <View style={[styles.avatarCircle, { borderColor: accentColor, backgroundColor: '#FFF' }]}>
+                                <Ionicons
+                                    name={iconName as any}
+                                    size={18}
+                                    color={accentColor}
+                                />
+                            </View>
+                            <View style={[styles.pointerTriangle, { borderTopColor: accentColor }]} />
+                        </View>
+                    </Marker>
+                );
+            })()}
         </>
     );
 };

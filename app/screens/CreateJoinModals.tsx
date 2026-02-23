@@ -35,11 +35,21 @@ const CIRCLE_NAME_SUGGESTIONS = [
   "Travel Group",
 ];
 
+const RELATION_OPTIONS = [
+  { value: "Mom", label: "Mom" },
+  { value: "Dad", label: "Dad" },
+  { value: "Son/ Daughter/Child", label: "Son/ Daughter/Child" },
+  { value: "Grandparent", label: "Grandparent" },
+  { value: "Partner/Spouse", label: "Partner/Spouse" },
+  { value: "Friend", label: "Friend" },
+  { value: "Other", label: "Other" },
+];
+
 // ==================== CREATE CIRCLE MODAL ====================
 interface CreateCircleModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (circleName: string) => Promise<void>;
+  onCreate: (circleName: string, relationship: string) => Promise<void>;
   title?: string;
   initialName?: string;
   buttonText?: string;
@@ -54,11 +64,13 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({
   buttonText = "Continue",
 }) => {
   const [circleName, setCircleName] = useState(initialName);
+  const [relationship, setRelationship] = useState<string>("");
 
   // Sync initialName if it changes (e.g. when switching between create/edit)
   React.useEffect(() => {
     setCircleName(initialName);
-  }, [initialName]);
+    setRelationship(""); // Reset relationship when modal reopens/props change
+  }, [initialName, isOpen]);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -70,11 +82,17 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({
       return;
     }
 
+    if (!relationship) {
+      setError("Please select your relationship to the circle creator");
+      return;
+    }
+
     try {
       setLoading(true);
       setError("");
-      await onCreate(finalName);
+      await onCreate(finalName, relationship);
       setCircleName("");
+      setRelationship("");
       onClose();
     } catch (err: any) {
       setError(err.message || "Failed to create circle");
@@ -85,6 +103,7 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({
 
   const handleClose = () => {
     setCircleName("");
+    setRelationship("");
     setError("");
     onClose();
   };
@@ -138,6 +157,36 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({
                   Your location is only shared with family members you invite. You can leave or remove members anytime.
                 </Text>
               </View>
+            </View>
+
+            <Text style={styles.inputLabelSimple}>Your Relationship (How others see you)</Text>
+            <View style={styles.relationshipContainer}>
+              {RELATION_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[
+                    styles.radioButtonRow,
+                    relationship === option.value && styles.radioButtonRowSelected
+                  ]}
+                  onPress={() => {
+                    setRelationship(option.value);
+                    setError("");
+                  }}
+                >
+                  <View style={[
+                    styles.radioButtonCircle,
+                    relationship === option.value && styles.radioButtonCircleSelected
+                  ]}>
+                    {relationship === option.value && <View style={styles.radioButtonInner} />}
+                  </View>
+                  <Text style={[
+                    styles.radioButtonLabel,
+                    relationship === option.value && styles.radioButtonLabelSelected
+                  ]}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             <Text style={[styles.suggestionLabel, { marginTop: 20 }]}>Suggestions:</Text>
@@ -643,6 +692,50 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: 16,
     marginLeft: 4,
+  },
+  relationshipContainer: {
+    marginBottom: 24,
+  },
+  radioButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  radioButtonRowSelected: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+  },
+  radioButtonCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#9CA3AF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  radioButtonCircleSelected: {
+    borderColor: '#2563eb',
+  },
+  radioButtonInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#2563eb',
+  },
+  radioButtonLabel: {
+    fontSize: 15,
+    color: '#475569',
+  },
+  radioButtonLabelSelected: {
+    color: '#1e293b',
+    fontWeight: '500',
   },
 });
 

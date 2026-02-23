@@ -83,6 +83,16 @@ const CIRCLE_NAME_SUGGESTIONS = [
     "Travel Group",
 ];
 
+const RELATION_OPTIONS = [
+    { value: "Mom", label: "Mom" },
+    { value: "Dad", label: "Dad" },
+    { value: "Son/ Daughter/Child", label: "Son/ Daughter/Child" },
+    { value: "Grandparent", label: "Grandparent" },
+    { value: "Partner/Spouse", label: "Partner/Spouse" },
+    { value: "Friend", label: "Friend" },
+    { value: "Other", label: "Other" },
+];
+
 const extractCirclePayload = (raw: any) => {
     if (!raw) return {};
     if (raw?.data?.circle) return raw.data.circle;
@@ -150,6 +160,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
 
     const [selectedCircleId, setSelectedCircleId] = useState<string | null>(null);
     const [newCircleName, setNewCircleName] = useState("");
+    const [relationship, setRelationship] = useState<string>("");
     const [creatingCircle, setCreatingCircle] = useState(false);
     const [createdCircleData, setCreatedCircleData] = useState<CircleData | null>(null);
     const [generatedCode, setGeneratedCode] = useState<string | null>(null);
@@ -228,6 +239,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
     const resetStates = () => {
         setCurrentView("list");
         setNewCircleName("");
+        setRelationship("");
         setInviteEmail("");
         setInviteNickname("");
         setGeneratedCode(null);
@@ -259,15 +271,25 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
             return;
         }
 
+        if (!relationship) {
+            showAlert({ title: "Required", message: "Please select your relationship.", type: 'warning' });
+            return;
+        }
+
         setCreatingCircle(true);
         try {
+            const body: any = {
+                name: name.trim(),
+                location: { latitude: 0, longitude: 0, name: "Default" },
+            };
+            if (relationship) {
+                body.relationship = relationship;
+            }
+
             const createResponse = await authenticatedFetch(`${API_BASE_URL}/circles`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", accept: "application/json" },
-                body: JSON.stringify({
-                    name: name.trim(),
-                    location: { latitude: 0, longitude: 0, name: "Default" },
-                }),
+                body: JSON.stringify(body),
             });
 
             if (!createResponse.ok) {
@@ -321,6 +343,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
 
             setCurrentView("share");
             setNewCircleName("");
+            setRelationship("");
             if (onRefresh) onRefresh();
         } catch (error) {
             console.error("Error creating circle:", error);
@@ -629,6 +652,33 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
                         Your location is only shared with family members you invite. You can leave or remove members anytime.
                     </Text>
                 </View>
+            </View>
+
+            <Text style={[styles.inputLabelSimple, { marginTop: 20 }]}>Your Relationship (How others see you)</Text>
+            <View style={styles.relationshipContainer}>
+                {RELATION_OPTIONS.map((option) => (
+                    <TouchableOpacity
+                        key={option.value}
+                        style={[
+                            styles.radioButtonRow,
+                            relationship === option.value && styles.radioButtonRowSelected
+                        ]}
+                        onPress={() => setRelationship(option.value)}
+                    >
+                        <View style={[
+                            styles.radioButtonCircle,
+                            relationship === option.value && styles.radioButtonCircleSelected
+                        ]}>
+                            {relationship === option.value && <View style={styles.radioButtonInner} />}
+                        </View>
+                        <Text style={[
+                            styles.radioButtonLabel,
+                            relationship === option.value && styles.radioButtonLabelSelected
+                        ]}>
+                            {option.label}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
             </View>
 
             <Text style={[styles.suggestionLabel, { marginTop: 20 }]}>Suggestions:</Text>
@@ -1019,4 +1069,12 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     rejectButtonText: { color: '#fff', fontWeight: '600' },
+    relationshipContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+    radioButtonRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, marginRight: 16 },
+    radioButtonRowSelected: { opacity: 1 },
+    radioButtonCircle: { height: 20, width: 20, borderRadius: 10, borderWidth: 2, borderColor: '#ccc', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+    radioButtonCircleSelected: { borderColor: '#113C9C' },
+    radioButtonInner: { height: 10, width: 10, borderRadius: 5, backgroundColor: '#113C9C' },
+    radioButtonLabel: { fontSize: 16, color: '#333' },
+    radioButtonLabelSelected: { color: '#113C9C', fontWeight: '600' },
 });

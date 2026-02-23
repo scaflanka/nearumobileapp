@@ -6,18 +6,17 @@ import {
     FlatList,
     Image,
     Modal,
-    Platform,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View,
+    View
 } from "react-native";
-import MapView, { Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
 import { CircleMember, Journey, JourneyHistoryPoint } from "../../types/models";
 
-const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 interface MemberJourneysModalProps {
     isOpen: boolean;
@@ -100,6 +99,216 @@ const calculateJourneyStats = (history: JourneyHistoryPoint[]) => {
         distanceMiles: (totalDist / 1609.34).toFixed(1),
         topSpeedMph: Math.round(maxSpeed),
     };
+};
+
+// --- Route Helpers ---
+const GOOGLE_MAPS_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
+
+const decodePolyline = (encoded: string) => {
+    let points: { latitude: number; longitude: number }[] = [];
+    let index = 0, len = encoded.length;
+    let lat = 0, lng = 0;
+
+    while (index < len) {
+        let b, shift = 0, result = 0;
+        do {
+            b = encoded.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lat += dlat;
+
+        shift = 0;
+        result = 0;
+        do {
+            b = encoded.charCodeAt(index++) - 63;
+            result |= (b & 0x1f) << shift;
+            shift += 5;
+        } while (b >= 0x20);
+        let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
+        lng += dlng;
+
+        points.push({ latitude: (lat / 1E5), longitude: (lng / 1E5) });
+    }
+    return points;
+};
+
+const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]) => {
+    if (historyCoords.length < 2) return null;
+
+    try {
+        const origin = `${historyCoords[0].latitude},${historyCoords[0].longitude}`;
+        const destination = `${historyCoords[historyCoords.length - 1].latitude},${historyCoords[historyCoords.length - 1].longitude}`;
+
+        let waypoints: string[] = [];
+        if (historyCoords.length > 2) {
+            // Sampling more points (max 23 intermediate) for better path fidelity
+            const maxWaypoints = 23;
+            if (historyCoords.length <= maxWaypoints + 2) {
+                waypoints = historyCoords.slice(1, -1).map(p => `${p.latitude},${p.longitude}`);
+            } else {
+                const step = (historyCoords.length - 2) / maxWaypoints;
+                for (let i = 0; i < maxWaypoints; i++) {
+                    const idx = Math.floor(1 + i * step);
+                    const p = historyCoords[idx];
+                    waypoints.push(`${p.latitude},${p.longitude}`);
+                }
+            }
+        }
+
+        const waypointsStr = waypoints.length > 0 ? `&waypoints=${waypoints.join("|")}` : "";
+        const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypointsStr}&key=${GOOGLE_MAPS_API_KEY}&mode=driving`;
+
+        const response = await fetch(url).catch(() => null);
+        if (!response) return null;
+        const data = await response.json().catch(() => ({}));
+
+        if (data.status === "OK" && data.routes.length > 0) {
+            // Combine all steps for high-resolution road-following path
+            const route = data.routes[0];
+            let fullPath: { latitude: number; longitude: number }[] = [];
+
+            route.legs.forEach((leg: any) => {
+                leg.steps.forEach((step: any) => {
+                    const stepCoords = decodePolyline(step.polyline.points);
+                    fullPath.push(...stepCoords);
+                });
+            });
+
+            // Filter out near-identical points to optimize rendering
+            return fullPath.filter((point, index, self) =>
+                index === 0 ||
+                Math.abs(point.latitude - self[index - 1].latitude) > 0.00001 ||
+                Math.abs(point.longitude - self[index - 1].longitude) > 0.00001
+            );
+        } else {
+            console.warn("Directions API returned non-OK status:", data.status, data.error_message);
+        }
+    } catch (e) {
+        console.warn("Failed to fetch route directions:", e);
+    }
+    return null;
+};
+
+// Check if a journey is likely a "Stay" based on displacement and distance
+const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
+    if (!history || history.length < 2) return true;
+
+    const start = history[0];
+    const end = history[history.length - 1];
+
+    // Displacement: Straight line distance between start and end
+    const displacementMeters = haversineDistanceMeters(
+        Number(start.latitude), Number(start.longitude),
+        Number(end.latitude), Number(end.longitude)
+    );
+
+    const stats = calculateJourneyStats(history);
+    const totalDistanceMeters = parseFloat(stats.distanceMiles) * 1609.34;
+
+    // If they haven't moved more than 150m from start to end, and top speed is low
+    // it's likely just drift or walking around a property
+    if (displacementMeters < 150 && stats.topSpeedMph < 10) return true;
+
+    // If total distance is extremely low
+    if (totalDistanceMeters < 200) return true;
+
+    return false;
+};
+
+const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
+    const mapRef = React.useRef<MapView>(null);
+    const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+    const historyCoords = useMemo(() => (history || []).map(p => ({
+        latitude: Number(p.latitude),
+        longitude: Number(p.longitude),
+    })), [history]);
+
+    useEffect(() => {
+        let isMounted = true;
+        const getRoute = async () => {
+            if (historyCoords.length < 2) return;
+            const coords = await fetchRoute(historyCoords);
+            if (isMounted && coords) {
+                setRouteCoords(coords);
+            }
+        };
+        getRoute();
+        return () => { isMounted = false; };
+    }, [historyCoords]);
+
+    // ONLY show coordinates returned by Google Directions (road-following)
+    // Avoid falling back to raw historyCoords to keep paths clean and avoid "nests" at houses
+    const displayCoords = routeCoords;
+
+    const handleMapReady = () => {
+        if (historyCoords.length > 0) {
+            setTimeout(() => {
+                mapRef.current?.fitToCoordinates(historyCoords, {
+                    edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+                    animated: true,
+                });
+            }, 800);
+        }
+    };
+
+    return (
+        <View style={{ flex: 1, width: '100%', height: SCREEN_HEIGHT * 0.25 }}>
+            <MapView
+                ref={mapRef}
+                provider={PROVIDER_GOOGLE}
+                style={styles.mapPreview}
+                scrollEnabled={true}
+                zoomEnabled={true}
+                pitchEnabled={false}
+                rotateEnabled={false}
+                onMapReady={handleMapReady}
+                initialRegion={historyCoords[0] ? {
+                    latitude: historyCoords[0].latitude,
+                    longitude: historyCoords[0].longitude,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                } : undefined}
+            >
+                {displayCoords.length > 1 && (
+                    <Polyline
+                        coordinates={displayCoords}
+                        strokeWidth={4}
+                        strokeColor={COLORS.primary}
+                        lineJoin="round"
+                        lineCap="round"
+                        geodesic={true}
+                    />
+                )}
+                {historyCoords.length > 0 && (
+                    <>
+                        {/* Start Point: Square */}
+                        <Marker coordinate={historyCoords[0]} anchor={{ x: 0.5, y: 0.5 }}>
+                            <View style={styles.startSquare} />
+                        </Marker>
+                        {/* End Point: Circle */}
+                        <Marker coordinate={historyCoords[historyCoords.length - 1]} anchor={{ x: 0.5, y: 0.5 }}>
+                            <View style={styles.endCircle} />
+                        </Marker>
+                    </>
+                )}
+            </MapView>
+
+            <View style={styles.mapControls}>
+                <TouchableOpacity
+                    style={styles.mapControlBtn}
+                    onPress={() => mapRef.current?.fitToCoordinates(historyCoords, {
+                        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+                        animated: true,
+                    })}
+                >
+                    <MaterialCommunityIcons name="focus-field" size={20} color={COLORS.primary} />
+                </TouchableOpacity>
+            </View>
+        </View>
+    );
 };
 
 const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
@@ -254,7 +463,8 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
         const timeRange = formatTimeRange(item.startTime, item.endTime);
 
         // Determine if it's a "Stay" or a "Trip"
-        const isStay = parseFloat(stats.distanceMiles) < 0.05;
+        // Use displacement and speed to filter out GPS drift at "homes and other places"
+        const isStay = isStationaryJourney(item.history || []);
 
         if (isStay) {
             const stayLocation = item.history?.[0]?.name || "Unknown Location";
@@ -289,32 +499,7 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                 </View>
 
                 <View style={styles.mapPreviewContainer}>
-                    <MapView
-                        provider={PROVIDER_GOOGLE}
-                        style={styles.mapPreview}
-                        scrollEnabled={false}
-                        zoomEnabled={false}
-                        pitchEnabled={false}
-                        rotateEnabled={false}
-                        liteMode={Platform.OS === 'android'}
-                        initialRegion={item.history?.[0] ? {
-                            latitude: Number(item.history[0].latitude),
-                            longitude: Number(item.history[0].longitude),
-                            latitudeDelta: 0.01,
-                            longitudeDelta: 0.01,
-                        } : undefined}
-                    >
-                        {item.history && item.history.length > 1 && (
-                            <Polyline
-                                coordinates={item.history.map(p => ({
-                                    latitude: Number(p.latitude),
-                                    longitude: Number(p.longitude),
-                                }))}
-                                strokeWidth={4}
-                                strokeColor={COLORS.primary}
-                            />
-                        )}
-                    </MapView>
+                    <JourneyMapItem history={item.history || []} />
                     <View style={styles.topSpeedPill}>
                         <MaterialCommunityIcons name="speedometer" size={14} color={COLORS.secondary} />
                         <Text style={styles.topSpeedPillLabel}>Top Speed</Text>
@@ -486,7 +671,7 @@ const styles = StyleSheet.create({
     addToPlacesText: { color: COLORS.white, fontSize: 13, fontWeight: '600' },
     mapPreviewContainer: {
         width: '100%',
-        height: 180,
+        height: SCREEN_HEIGHT * 0.25,
         borderRadius: 16,
         overflow: 'hidden',
         backgroundColor: COLORS.bgLight,
@@ -515,6 +700,52 @@ const styles = StyleSheet.create({
     emptyContainer: { alignItems: 'center', marginTop: 60, paddingHorizontal: 40 },
     emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.textMain, marginTop: 16 },
     emptyText: { fontSize: 14, color: COLORS.textSub, textAlign: 'center', marginTop: 8 },
+
+    // New Map Styles
+    startSquare: {
+        width: 14,
+        height: 14,
+        backgroundColor: COLORS.primary,
+        borderWidth: 2,
+        borderColor: COLORS.white,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+        elevation: 5,
+    },
+    endCircle: {
+        width: 14,
+        height: 14,
+        borderRadius: 7,
+        backgroundColor: COLORS.primary,
+        borderWidth: 2,
+        borderColor: COLORS.white,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+        elevation: 5,
+    },
+    mapControls: {
+        position: 'absolute',
+        top: 12,
+        right: 12,
+        gap: 8,
+    },
+    mapControlBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: "rgba(255, 255, 255, 0.9)",
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
 });
 
 export default MemberJourneysModal;

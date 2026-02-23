@@ -367,14 +367,20 @@ const setLastPostedLocationForCircle = async (
 
 
 
-const handleCreateCircleAction = async (name: string): Promise<any> => {
+const handleCreateCircleAction = async (name: string, relationship?: string): Promise<any> => {
+  const body: any = {
+    name: name.trim(),
+    location: { latitude: 0, longitude: 0, name: "Default" },
+  };
+
+  if (relationship) {
+    body.relationship = relationship;
+  }
+
   const response = await authenticatedFetch(`${API_BASE_URL}/circles`, {
     method: "POST",
     headers: { "Content-Type": "application/json", accept: "application/json" },
-    body: JSON.stringify({
-      name: name.trim(),
-      location: { latitude: 0, longitude: 0, name: "Default" },
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
@@ -617,6 +623,21 @@ const sanitizeLocationForCache = (
     name,
     metadata: location.metadata && typeof location.metadata === "object" ? { ...location.metadata } : null,
   };
+};
+
+const getPlaceTypeIcon = (type?: string | null) => {
+  const normalized = type?.trim().toLowerCase();
+  switch (normalized) {
+    case 'home': return 'home';
+    case 'office': return 'briefcase';
+    case 'school': return 'school';
+    case 'gym': return 'fitness';
+    case 'hotel': return 'bed';
+    case 'ground': return 'map';
+    case 'business': return 'business';
+    case 'center': return 'location';
+    default: return 'location-sharp';
+  }
 };
 
 const readCircleLocationsCache = async (): Promise<CachedCircleLocationMap> => {
@@ -1567,8 +1588,19 @@ const normalizeLocationPoint = (loc: any): LocationPoint | null => {
   }
 
   let metadata: LocationPoint["metadata"] | undefined;
-  if (loc?.metadata && typeof loc.metadata === "object") {
-    metadata = { ...loc.metadata };
+  if (loc?.metadata) {
+    if (typeof loc.metadata === "object") {
+      metadata = { ...loc.metadata };
+    } else if (typeof loc.metadata === "string" && loc.metadata.trim().length > 0) {
+      try {
+        const parsed = JSON.parse(loc.metadata);
+        if (parsed && typeof parsed === "object") {
+          metadata = parsed;
+        }
+      } catch (e) {
+        console.warn("Failed to parse location metadata string", e);
+      }
+    }
   }
 
   const mergeMetadata = (updates: Partial<NonNullable<LocationPoint["metadata"]>>) => {
@@ -2652,6 +2684,155 @@ const MapScreen: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  const fetchCircleLiveStatus = useCallback(async (circleId: number | string | undefined) => {
+    if (!circleId) return;
+    const circleIdParam = String(circleId);
+
+    try {
+      const response = await authenticatedFetch(`${API_BASE_URL}/circles/${circleIdParam}/live-status`, {
+        headers: { accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = await response.json();
+      const liveData = payload?.data;
+      console.log("liveData", liveData);
+
+      if (!Array.isArray(liveData)) return;
+
+      // 1. Update Member Locations only if changed
+      setMemberLocations(prev => {
+        const next = { ...prev };
+        let anyChanged = false;
+        liveData.forEach(m => {
+          if (m.locationChange === 'same') return;
+
+          const mid = String(m.id);
+          next[mid] = {
+            latitude: m.latitude,
+            longitude: m.longitude,
+            heading: undefined,
+            accuracy: null,
+            speed: m.speed,
+            battery: m.battery,
+          };
+          anyChanged = true;
+        });
+        return anyChanged ? next : prev;
+      });
+
+      // 2. Update Avatar URLs if changed
+      setMemberAvatarUrls(prev => {
+        const next = { ...prev };
+        let anyChanged = false;
+        liveData.forEach(m => {
+          if (m.locationChange === 'same') return;
+          const mid = String(m.id);
+          if (m.avatar && prev[mid] !== m.avatar) {
+            next[mid] = m.avatar;
+            anyChanged = true;
+          }
+        });
+        return anyChanged ? next : prev;
+      });
+
+      // 3. Update Member Data if changed & Sort
+      setSelectedCircleMembers(prev => {
+        const nextMembers = [...prev];
+        let anyChanged = false;
+
+        liveData.forEach(update => {
+          if (update.locationChange === 'same') return;
+          const mid = String(update.id);
+          const index = nextMembers.findIndex(m => resolveMemberId(m) === mid);
+
+          if (index !== -1) {
+            const member = nextMembers[index];
+            const hasInfoChanged =
+              member.name !== update.name ||
+              member.avatar !== update.avatar ||
+              (member as any).status !== update.status ||
+              (member as any).locationText !== update.locationText ||
+              (member as any).battery !== update.battery ||
+              (member as any).speed !== update.speed;
+
+            if (hasInfoChanged) {
+              anyChanged = true;
+              nextMembers[index] = {
+                ...member,
+                name: update.name,
+                avatar: update.avatar,
+                status: update.status,
+                locationText: update.locationText,
+                lastSeen: update.lastSeen,
+                isMe: update.isMe, // Preserving isMe from new API
+                battery: update.battery,
+                speed: update.speed,
+              } as any;
+            }
+          } else {
+            // Member not found in state, add it
+            anyChanged = true;
+            nextMembers.push({
+              id: update.id,
+              name: update.name,
+              avatar: update.avatar,
+              status: update.status,
+              locationText: update.locationText,
+              lastSeen: update.lastSeen,
+              isMe: update.isMe,
+              role: update.role,
+              battery: update.battery,
+              speed: update.speed,
+            } as any);
+          }
+        });
+
+        if (!anyChanged) {
+          // Even if no data changed, we might want to check the sort if this is the first poll
+          // But usually we just return prev.
+          // Let's enforce sort if it's the first time we see isMe
+          const isSorted = nextMembers.length > 0 && ((nextMembers[0] as any).isMe || resolveMemberId(nextMembers[0]) === currentUserId);
+          if (isSorted) return prev;
+        }
+
+        // Sort: isMe first, then name
+        return nextMembers.sort((a, b) => {
+          const aId = resolveMemberId(a);
+          const bId = resolveMemberId(b);
+          const aMe = (a as any).isMe || aId === currentUserId;
+          const bMe = (b as any).isMe || bId === currentUserId;
+          if (aMe && !bMe) return -1;
+          if (!aMe && bMe) return 1;
+          const aName = a.name || "";
+          const bName = b.name || "";
+          return aName.localeCompare(bName);
+        });
+      });
+
+    } catch (e) {
+      console.warn("Failed to poll live status:", e);
+    }
+  }, []);
+
+  // Poll for circle live status every 5 minutes
+  useEffect(() => {
+    let interval: any;
+    const runPoll = () => {
+      const cid = selectedCircleRef.current?.id;
+      if (cid) {
+        fetchCircleLiveStatus(cid);
+      }
+    };
+
+    runPoll();
+    interval = setInterval(runPoll, 300000); // 5 minutes
+    return () => clearInterval(interval);
+  }, [fetchCircleLiveStatus]);
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -2850,6 +3031,7 @@ const MapScreen: React.FC = () => {
       memberFetchTimestampsRef.current[circleIdParam] = Date.now();
     }
   }, [currentUserId]);
+
 
   // --- CORE LOGIC: Select Circle ---
   const selectCircle = useCallback(
@@ -3535,17 +3717,6 @@ const MapScreen: React.FC = () => {
               });
             }
 
-            // Process location update immediately for connected circle
-            if (activeCircleIdRef.current) {
-              // Use non-blocking call to avoid freezing UI
-              void processCircleLocationUpdate(activeCircleIdRef.current, {
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-                accuracy: position.coords.accuracy ?? null,
-                speed: position.coords.speed ?? null,
-              });
-            }
-
             setLocation(nextLocation);
             locationRef.current = nextLocation;
           }
@@ -3700,7 +3871,7 @@ const MapScreen: React.FC = () => {
           loc.name && loc.name.trim().length > 0
             ? loc.name.trim()
             : metadataAddress ?? `Place ${index + 1}`;
-        const subtitle = metadataAddress ?? `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`;
+        const subtitle = metadataAddress ?? "Location Label";
 
         return {
           id,
@@ -5674,9 +5845,6 @@ const MapScreen: React.FC = () => {
   //   );
   // };
 
-  const hasMemberLocationForCurrentUser = Boolean(currentUserId && memberLocations[currentUserId]);
-
-  const shouldRenderStandaloneCurrentUserMarker = Boolean(location) && !hasMemberLocationForCurrentUser;
 
   return (
     <KeyboardAvoidingView
@@ -5732,16 +5900,15 @@ const MapScreen: React.FC = () => {
           {/* Render Member Journeys (Polylines) */}
 
 
-          {/* Render member markers with profile avatars */}
-          {Object.entries(memberLocations).map(([memberId, coords]) => {
-            const isCurrentUser = typeof currentUserId === "string" && currentUserId === memberId;
-            const coordinate = isCurrentUser && location ? location : coords;
-            return renderMemberMarker(memberId, coordinate, isCurrentUser);
-          })}
+          {/* Render OTHER member markers */}
+          {Object.entries(memberLocations)
+            .filter(([mid]) => mid !== currentUserId)
+            .map(([memberId, coords]) => {
+              return renderMemberMarker(memberId, coords, false);
+            })}
 
-          {shouldRenderStandaloneCurrentUserMarker && location
-            ? renderMemberMarker(currentUserId, location, true)
-            : null}
+          {/* Render LOGGED-IN user marker separately for stability */}
+          {location && renderMemberMarker(currentUserId, location, true)}
 
           {currentLocations.flatMap((loc: LocationPoint, index: number) => {
             let metadataAddress: string | undefined;
@@ -5790,6 +5957,8 @@ const MapScreen: React.FC = () => {
                 title={markerTitle}
                 description={calloutDescription}
                 radius={circleRadius}
+                placeType={(loc.metadata as any)?.placeType}
+                locationType={(loc.metadata as any)?.locationType}
                 isAssignedToCurrentUser={isAssignedToCurrentUser}
               />
             );
@@ -5997,9 +6166,22 @@ const MapScreen: React.FC = () => {
 
                       <View style={{ flex: 1 }}>
                         <Text style={{ fontSize: 16, fontWeight: '700', color: '#1E3A8A' }}>{displayName}</Text>
-                        <Text style={{ fontSize: 13, color: '#3B82F6', marginTop: 2 }}>
-                          {roleLabel} {member.Membership?.metadata?.relation ? `• ${member.Membership.metadata.relation}` : ''}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                          <View style={{
+                            width: 8, height: 8, borderRadius: 4,
+                            backgroundColor: (member as any).status === "Online" ? "#22C55E" : "#9CA3AF",
+                            marginRight: 6
+                          }} />
+                          <Text style={{ fontSize: 13, color: '#3B82F6' }}>
+                            {roleLabel} {member.Membership?.metadata?.relation ? `• ${member.Membership.metadata.relation}` : ''}
+                            {(member as any).status && ` • ${(member as any).status}`}
+                          </Text>
+                        </View>
+                        {(member as any).locationText && (
+                          <Text style={{ fontSize: 12, color: '#64748B', marginTop: 2 }} numberOfLines={1}>
+                            {(member as any).locationText}
+                          </Text>
+                        )}
                       </View>
 
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -6091,9 +6273,9 @@ const MapScreen: React.FC = () => {
                       </View>
                       <View style={styles.assignedSummaryTextWrapper}>
                         <Text style={styles.assignedSummaryTitle}>{assignedLocationDetails?.label ?? "Assigned location"}</Text>
-                        <Text style={styles.assignedSummarySubtitle}>
+                        {/* <Text style={styles.assignedSummarySubtitle}>
                           {assignedLocationDetails?.subtitle ?? "We will notify you once additional details are available."}
-                        </Text>
+                        </Text> */}
                         {assignedLocationDetails?.coordinates ? (
                           <Text style={styles.assignedSummaryHint}>Tap to focus on this place</Text>
                         ) : null}
@@ -6120,8 +6302,7 @@ const MapScreen: React.FC = () => {
                         }
 
                         const label = loc.name && loc.name.trim().length > 0 ? loc.name.trim() : metadataAddress ?? `Place ${index + 1}`;
-                        const coordinateLabel = `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`;
-                        const subtitle = metadataAddress && metadataAddress !== label ? metadataAddress : coordinateLabel;
+                        const subtitle = metadataAddress && metadataAddress !== label ? metadataAddress : "Location Label";
                         const hasEditableId = loc.id !== undefined && loc.id !== null && String(loc.id).trim().length > 0;
                         const canEditThisLocation = canManageLocations && hasEditableId;
                         const normalizedLocationId = normalizeIdentifier(loc.id);
@@ -6133,11 +6314,15 @@ const MapScreen: React.FC = () => {
                         return (
                           <View key={loc.id ? `saved-${loc.id}` : `saved-${index}`} style={styles.savedPlaceRow}>
                             <View style={styles.savedPlaceIconCircle}>
-                              <MaterialCommunityIcons name="map-marker" size={18} color={COLORS.primary} />
+                              <Ionicons
+                                name={getPlaceTypeIcon((loc.metadata as any)?.locationType || (loc.metadata as any)?.placeType) as any}
+                                size={18}
+                                color={COLORS.primary}
+                              />
                             </View>
                             <View style={styles.savedPlaceTextWrapper}>
                               <Text style={styles.savedPlaceName}>{label}</Text>
-                              {/* <Text style={styles.savedPlaceCoords}>{subtitle}</Text>  */}
+                              <Text style={styles.savedPlaceCoords}>{subtitle}</Text>
                               {isAssignedToCurrentUser ? (
                                 <View style={styles.assignedBadge}>
                                   <Ionicons name="star" size={12} color={COLORS.primary} />
@@ -7061,9 +7246,9 @@ const MapScreen: React.FC = () => {
         <CreateCircleModal
           isOpen={isCreateCircleModalOpen}
           onClose={() => setIsCreateCircleModalOpen(false)}
-          onCreate={async (name) => {
+          onCreate={async (name, relationship) => {
             try {
-              const result = await handleCreateCircleAction(name);
+              const result = await handleCreateCircleAction(name, relationship);
               const newCircleId = result?.data?.id ?? result?.id ?? result?.data?.circle?.id;
 
               if (newCircleId) {
@@ -7128,6 +7313,9 @@ const MapScreen: React.FC = () => {
           onClose={() => setIsSmartNotificationModalOpen(false)}
           userName={storedUser?.name || "User"}
           userAvatarUrl={currentUserAvatarUrl}
+          circleId={selectedCircle ? String(selectedCircle.id) : undefined}
+          notificationSettings={selectedCircle?.notificationSettings}
+          onSettingsChanged={() => requestCirclesRefresh()}
         />
 
         <CircleManagementModal

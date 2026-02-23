@@ -83,6 +83,16 @@ const MIN_RADIUS_METERS = 20;
 const MAX_RADIUS_METERS = 5000;
 const DEFAULT_RADIUS_METERS = 100;
 
+const PLACE_TYPES = [
+    { label: "Home", value: "Home", icon: "home" },
+    { label: "Office", value: "Office", icon: "briefcase" },
+    { label: "School", value: "School", icon: "school" },
+    { label: "Gym", value: "Gym", icon: "fitness" },
+    { label: "Hotel", value: "Hotel", icon: "bed" },
+    { label: "Ground", value: "Ground", icon: "map" },
+    { label: "Business", value: "Business", icon: "business" },
+] as const;
+
 const FALLBACK_ENDPOINT = "https://nominatim.openstreetmap.org/search";
 
 const clampRadiusValue = (value: number): number => {
@@ -142,6 +152,20 @@ const resolveRadiusFromMetadata = (metadata: Record<string, unknown> | null | un
     return null;
 };
 
+const getPlaceTypeIcon = (type?: string | null) => {
+    const normalized = type?.trim().toLowerCase();
+    switch (normalized) {
+        case 'home': return 'home';
+        case 'office': return 'briefcase';
+        case 'school': return 'school';
+        case 'gym': return 'fitness';
+        case 'hotel': return 'bed';
+        case 'ground': return 'map';
+        case 'business': return 'business';
+        default: return 'location-sharp';
+    }
+};
+
 const buildAddressFromReverseGeocode = async (latitude: number, longitude: number): Promise<string> => {
     try {
         const [reverse] = await Location.reverseGeocodeAsync({ latitude, longitude });
@@ -162,7 +186,7 @@ const buildAddressFromReverseGeocode = async (latitude: number, longitude: numbe
         console.warn("reverseGeocodeAsync failed", error);
     }
 
-    return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+    return "Location Label";
 };
 
 const fetchFallbackSuggestions = async (query: string): Promise<GeocodeSuggestion[]> => {
@@ -194,7 +218,7 @@ const fetchFallbackSuggestions = async (query: string): Promise<GeocodeSuggestio
                 address:
                     typeof item.display_name === "string" && item.display_name.trim().length > 0
                         ? item.display_name.trim()
-                        : `${Number(item.lat).toFixed(4)}, ${Number(item.lon).toFixed(4)}`,
+                        : "Location Label",
             }));
     } catch (error) {
         console.warn("Fallback geocoding failed", error);
@@ -257,6 +281,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     const [isNotifyOnArrival, setIsNotifyOnArrival] = useState(true);
     const [isNotifyOnDeparture, setIsNotifyOnDeparture] = useState(true);
     const [mapType, setMapType] = useState<"standard" | "satellite">("standard");
+    const [selectedPlaceType, setSelectedPlaceType] = useState<string>("Home");
 
     const hasHydratedRef = useRef(false);
     const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -294,6 +319,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
         setIsKeyboardVisible(false); // Added
         setIsNotifyOnArrival(true); // Added
         setIsNotifyOnDeparture(true); // Added
+        setSelectedPlaceType("Home");
     }, []);
 
     const requestLocationPermission = useCallback(async () => {
@@ -322,7 +348,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
 
             const finalAddress = resolvedAddress && resolvedAddress.length > 0
                 ? resolvedAddress
-                : `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+                : "Resolving address...";
 
             setSelectedLocation({ latitude, longitude, address: finalAddress });
             if (!preserveNickname && !hasEditedNickname) {
@@ -405,7 +431,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                 metadataAddress = metadata.formattedAddress.trim();
             }
 
-            const fallbackAddress = metadataAddress ?? `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+            const fallbackAddress = metadataAddress ?? "Location Label";
             const nicknameSeed = typeof editingLocation.name === "string" && editingLocation.name.trim().length > 0
                 ? editingLocation.name.trim()
                 : fallbackAddress;
@@ -431,6 +457,11 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                 latitudeDelta: 0.008,
                 longitudeDelta: 0.008,
             });
+
+            const metadataPlaceType = (metadata?.locationType || metadata?.placeType) as string | undefined;
+            if (metadataPlaceType) {
+                setSelectedPlaceType(metadataPlaceType);
+            }
         };
 
         const hydrate = async () => {
@@ -625,6 +656,8 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                     radius: sanitizedRadius,
                     notifyOnArrival: isNotifyOnArrival,
                     notifyOnDeparture: isNotifyOnDeparture,
+                    placeType: selectedPlaceType,
+                    locationType: selectedPlaceType,
                 },
             };
 
@@ -676,7 +709,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                 setIsSavingLocation(false);
             }
         },
-        [circleId, radiusMeters]
+        [circleId, radiusMeters, isNotifyOnArrival, isNotifyOnDeparture, selectedPlaceType]
     );
 
     const handleSaveLocation = useCallback(async () => {
@@ -859,6 +892,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                                 title={markerTitle}
                                                 description={markerDescription}
                                                 radius={(loc.metadata as any)?.radius || DEFAULT_RADIUS_METERS}
+                                                placeType={(loc.metadata as any)?.placeType}
                                                 isAssignedToCurrentUser={false}
                                             />
                                         );
@@ -904,16 +938,60 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                     })}
                                 </MapView>
                                 <View style={styles.centerMarkerContainer} pointerEvents="none">
-                                    <Ionicons name="location" size={36} color={COLORS.accent} />
+                                    <View style={styles.dynamicMarkerWrapper}>
+                                        <View style={[styles.dynamicMarkerCircle, { borderColor: COLORS.accent }]}>
+                                            <Ionicons
+                                                name={getPlaceTypeIcon(selectedPlaceType) as any}
+                                                size={20}
+                                                color={COLORS.accent}
+                                            />
+                                        </View>
+                                        <View style={[styles.dynamicMarkerPointer, { borderTopColor: COLORS.accent }]} />
+                                    </View>
                                 </View>
                             </View>
                             <Text style={styles.mapHint}>Move the map to align the pin.</Text>
                             <Text style={styles.mapStatus}>{mapStatus}</Text>
                         </View>
 
+                        <View style={styles.placeTypeSection}>
+                            <Text style={styles.sectionLabel}>Place Type</Text>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.placeTypeContainer}
+                            >
+                                {PLACE_TYPES.map((type) => (
+                                    <TouchableOpacity
+                                        key={type.value}
+                                        style={[
+                                            styles.placeTypeChip,
+                                            selectedPlaceType === type.value && styles.placeTypeChipSelected
+                                        ]}
+                                        onPress={() => setSelectedPlaceType(type.value)}
+                                    >
+                                        <Ionicons
+                                            name={type.icon as any}
+                                            size={18}
+                                            color={selectedPlaceType === type.value ? COLORS.white : COLORS.gray}
+                                            style={styles.placeTypeIcon}
+                                        />
+                                        <Text
+                                            style={[
+                                                styles.placeTypeLabel,
+                                                selectedPlaceType === type.value && styles.placeTypeLabelSelected
+                                            ]}
+                                        >
+                                            {type.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+
                         {selectedLocation ? (
                             <View style={styles.nicknameSection}>
-                                <Text style={styles.nicknameLabel}>Label this place</Text>
+                                <Text style={styles.nicknameLabel}>{selectedLocation?.address || "Label this place"}</Text>
                                 <TextInput
                                     value={placeNickname}
                                     onChangeText={(value) => {
@@ -1145,6 +1223,36 @@ const styles = StyleSheet.create({
         alignItems: "center",
         zIndex: 10,
     },
+    dynamicMarkerWrapper: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    dynamicMarkerCircle: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        borderWidth: 2,
+        backgroundColor: 'white',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+        elevation: 5,
+    },
+    dynamicMarkerPointer: {
+        width: 0,
+        height: 0,
+        backgroundColor: 'transparent',
+        borderStyle: 'solid',
+        borderLeftWidth: 3,
+        borderRightWidth: 3,
+        borderTopWidth: 5,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        marginTop: -1,
+    },
     mapHint: {
         fontSize: 12,
         color: COLORS.gray,
@@ -1157,6 +1265,44 @@ const styles = StyleSheet.create({
         marginTop: 4,
         textAlign: "center",
         fontWeight: "500",
+    },
+    sectionLabel: {
+        fontSize: 16,
+        fontWeight: "600",
+        color: COLORS.black,
+        marginBottom: 12,
+    },
+    placeTypeSection: {
+        marginBottom: 24,
+    },
+    placeTypeContainer: {
+        paddingVertical: 4,
+    },
+    placeTypeChip: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: COLORS.lightGray,
+        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        marginRight: 10,
+        borderWidth: 1,
+        borderColor: COLORS.lightGray,
+    },
+    placeTypeChipSelected: {
+        backgroundColor: COLORS.primary,
+        borderColor: COLORS.primary,
+    },
+    placeTypeIcon: {
+        marginRight: 6,
+    },
+    placeTypeLabel: {
+        fontSize: 14,
+        color: COLORS.gray,
+        fontWeight: "500",
+    },
+    placeTypeLabelSelected: {
+        color: COLORS.white,
     },
     nicknameSection: {
         marginBottom: 24,

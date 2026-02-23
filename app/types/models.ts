@@ -17,6 +17,7 @@ export interface CircleData {
   metadata?: { radius?: number };
   creatorId?: string;
   creator?: { id: string; name?: string };
+  notificationSettings?: any;
 }
 
 export interface UserLocation {

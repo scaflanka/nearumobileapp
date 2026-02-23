@@ -1,4 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import React, { useEffect, useRef, useState } from "react";
 import {
     Animated,
@@ -9,10 +10,11 @@ import {
     StyleSheet,
     Text,
     TouchableOpacity,
+    Vibration,
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { API_BASE_URL } from "../../../utils/auth";
+import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
 import { useAlert } from "../../context/AlertContext";
 // If CircleMember is not exported from types/models, I might need to import it or define a partial interface.
 // Based on MapScreen.tsx it is exported.
@@ -40,8 +42,8 @@ const SosModal: React.FC<SosModalProps> = ({
     members = [],
 }) => {
     const { showAlert } = useAlert();
-    const [status, setStatus] = useState<"IDLE" | "SENT">("IDLE");
-    const [countdown, setCountdown] = useState(5); // Not requested but good for safety? User said 'Tap to send', then 'Sent'.
+    const [status, setStatus] = useState<"IDLE" | "COUNTDOWN" | "SENT">("IDLE");
+    const [countdown, setCountdown] = useState(10);
     // I will directly trigger 'SENT' on tap for now to match 'Tap to send'.
 
     // Slide Animation Values
@@ -51,19 +53,80 @@ const SosModal: React.FC<SosModalProps> = ({
     useEffect(() => {
         if (isOpen) {
             setStatus("IDLE");
-            setCountdown(5); // Reset
+            setCountdown(10); // Reset
             slideAnim.setValue(0);
         }
     }, [isOpen]);
 
-    const handleSendSOS = () => {
-        // API Call would go here
-        // For now, switch to SENT state
+    useEffect(() => {
+        let timer: any;
+        if (status === "COUNTDOWN" && countdown > 0) {
+            timer = setTimeout(() => {
+                Vibration.vibrate(500);
+                setCountdown((c) => c - 1);
+            }, 1000);
+        } else if (status === "COUNTDOWN" && countdown === 0) {
+            handleSendSOS();
+        }
+        return () => clearTimeout(timer);
+    }, [status, countdown]);
+
+    const handleStartCountdown = () => {
+        setStatus("COUNTDOWN");
+        setCountdown(10);
+    };
+
+    const handleSendSOS = async () => {
+        // Prevent multiple calls
+        if (status === "SENT") return;
+
         setStatus("SENT");
 
-        // Simulate API call or actual logic
-        // In a real implementation this would trigger an API. 
-        // The user's prompt implies UI change first.
+        try {
+            // 1. Get current location for the SOS alert
+            let latitude = 0;
+            let longitude = 0;
+            const message = "SOS Emergency Alert!";
+
+            try {
+                const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
+                if (locStatus === 'granted') {
+                    const location = await Location.getCurrentPositionAsync({
+                        accuracy: Location.Accuracy.High
+                    });
+                    latitude = location.coords.latitude;
+                    longitude = location.coords.longitude;
+                }
+            } catch (locError) {
+                console.warn("Failed to get location for SOS:", locError);
+            }
+
+            // 2. Call the SOS API endpoint
+            const response = await authenticatedFetch(`${API_BASE_URL}/profile/sos`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'accept': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    latitude: latitude,
+                    longitude: longitude
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.warn("SOS API call failed:", errorData.message || response.statusText);
+            } else {
+                const result = await response.json();
+                console.log("SOS Alert sent successfully:", result);
+            }
+        } catch (error) {
+            console.warn("Error in handleSendSOS process:", error);
+        }
+
+        // Keep the modal open for 2 seconds then automatically close
+        setTimeout(() => {
+            onClose();
+        }, 2000);
     };
 
     const handleCancelSOS = () => {
@@ -126,7 +189,14 @@ const SosModal: React.FC<SosModalProps> = ({
                                 <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
                             ) : (
                                 <Text style={styles.avatarInitials}>
-                                    {(member.firstName?.[0] || "") + (member.lastName?.[0] || "")}
+                                    {member.name
+                                        ? member.name
+                                            .split(" ")
+                                            .map((n) => n[0])
+                                            .slice(0, 2)
+                                            .join("")
+                                            .toUpperCase()
+                                        : "??"}
                                 </Text>
                             )}
                         </View>
@@ -146,14 +216,18 @@ const SosModal: React.FC<SosModalProps> = ({
             transparent={false} // Full screen modal as per image appearance
             onRequestClose={onClose}
         >
-            <SafeAreaView style={[styles.container, status === "SENT" ? styles.containerRed : styles.containerBlue]}>
+            <SafeAreaView style={[styles.container, status !== "IDLE" ? styles.containerRed : styles.containerBlue]}>
 
                 {/* Header */}
                 <View style={styles.header}>
-                    <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-                        <Ionicons name="close" size={28} color={status === "SENT" ? "#fff" : "#1E3A8A"} />
+                    <TouchableOpacity
+                        onPress={onClose}
+                        style={styles.closeButton}
+                        disabled={status === "SENT"}
+                    >
+                        <Ionicons name="close" size={28} color={status !== "IDLE" ? "#fff" : "#1E3A8A"} />
                     </TouchableOpacity>
-                    <Text style={[styles.headerTitle, status === "SENT" ? styles.textWhite : styles.textBlue]}>SOS</Text>
+                    <Text style={[styles.headerTitle, status !== "IDLE" ? styles.textWhite : styles.textBlue]}>SOS</Text>
                     <View style={{ width: 28 }} />
                 </View>
 
@@ -163,27 +237,17 @@ const SosModal: React.FC<SosModalProps> = ({
                         <View style={styles.textContainer}>
                             <Text style={styles.idleTitle}>
                                 Your SOS alert and location were sent to your Circle and emergency contacts
-                                {/* Wait, Image 3 text description says "Tap to send SOS". The prompt says: "Before show 1st SOS on UI show 3rd iamge to to send SOS". Image 3 is the blue one.  */}
-                                {/* Actually, let's look at the text 'Tap to send SOS (or press and hold)' for the blue button. */}
-                                {/* The prompt text says "Before show 1st SOS on UI show 3rd iamge to to send SOS". */}
                             </Text>
-                            {/* Actually, looking at typical SOS flows: 
-                      Screen 1 (Blue): "Tap to send"
-                      Screen 2 (Red): "SOS Sent"
-                  */}
                             <Text style={styles.idleDescription}>
                                 Your SOS alert and location were sent to your Circle and emergency contacts
-                                {/* This text seems to belong to the RED screen based on "were sent" past tense. */}
-                                {/* The Blue screen likely has instructions or just the button. */}
-                                {/* Let's follow the image 3 description: "Tap to send SOS". */}
                             </Text>
                         </View>
 
                         <View style={styles.centerContainer}>
                             <TouchableOpacity
                                 style={styles.sosButtonBlue}
-                                onPress={handleSendSOS}
-                                onLongPress={handleSendSOS}
+                                onPress={handleStartCountdown}
+                                onLongPress={handleStartCountdown}
                                 delayLongPress={800}
                                 activeOpacity={0.8}
                             >
@@ -200,37 +264,55 @@ const SosModal: React.FC<SosModalProps> = ({
                         </View>
                     </View>
                 ) : (
-                    // SENT STATE (Image 1/2)
+                    // COUNTDOWN & SENT STATE (Red Background)
                     <View style={styles.content}>
                         <Text style={styles.sentTitle}>
-                            Your SOS alert and location were sent to{"\n"}your Circle and emergency contacts
+                            {status === "COUNTDOWN"
+                                ? "Sending SOS to your Circle and\nemergency contacts in..."
+                                : "Your SOS alert and location were sent to\nyour Circle and emergency contacts"}
                         </Text>
 
                         <View style={styles.centerContainer}>
-                            {/* Large Icon */}
-                            {/* Using an icon that resembles the one in description: "Wifi/Alert symbol" */}
-                            <View style={styles.iconContainerRed}>
-                                <MaterialCommunityIcons name="broadcast" size={80} color="#EF4444" />
-                                <View style={styles.alertIconOverlay}>
-                                    <Ionicons name="alert" size={40} color="#EF4444" />
+                            {status === "COUNTDOWN" ? (
+                                <View style={styles.countdownContainer}>
+                                    <Text style={styles.countdownText}>{countdown}</Text>
                                 </View>
+                            ) : (
+                                <>
+                                    <View style={styles.iconContainerRed}>
+                                        <MaterialCommunityIcons name="broadcast" size={80} color="#EF4444" />
+                                        <View style={styles.alertIconOverlay}>
+                                            <Ionicons name="alert" size={40} color="#EF4444" />
+                                        </View>
+                                    </View>
+                                    <MaterialCommunityIcons
+                                        name="alarm-light-outline"
+                                        size={120}
+                                        color="#fff"
+                                        style={{ position: "absolute", opacity: 0.3 }}
+                                    />
+                                    <Text style={styles.sosTextRed}>S O S</Text>
+                                </>
+                            )}
+                        </View>
+
+                        {status === "SENT" && (
+                            <View style={styles.infoContainerRed}>
+                                <Text style={styles.infoTextRed}>
+                                    Your Work place successfully saved to{"\n"}your circle
+                                </Text>
                             </View>
-                            <MaterialCommunityIcons name="alarm-light-outline" size={120} color="#fff" style={{ position: 'absolute', opacity: 0.3 }} />
-                            {/* Or better, just a big custom icon composition if needed, but allow MaterialIcons for now */}
-
-                            <Text style={styles.sosTextRed}>S O S</Text>
-                        </View>
-
-                        <View style={styles.infoContainerRed}>
-                            <Text style={styles.infoTextRed}>
-                                Your Work place successfully saved to{"\n"}your circle
-                            </Text>
-                        </View>
+                        )}
 
                         {/* Slide to Cancel */}
-                        <View style={styles.sliderContainer}>
+                        <View
+                            style={styles.sliderContainer}
+                            pointerEvents={status === "SENT" ? "none" : "auto"}
+                        >
                             <View style={styles.sliderTrack}>
-                                <Text style={styles.sliderText}>Slide to Cancel SOS</Text>
+                                <Text style={styles.sliderText}>
+                                    {status === "COUNTDOWN" ? "Slide to Cancel Sending" : "Slide to Cancel SOS"}
+                                </Text>
                                 <Animated.View
                                     style={[styles.sliderKnob, { transform: [{ translateX: slideAnim }] }]}
                                     {...panResponder.panHandlers}
@@ -425,6 +507,15 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         fontSize: 15,
         lineHeight: 22,
+    },
+    countdownContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    countdownText: {
+        fontSize: 120,
+        fontWeight: '700',
+        color: '#FFFFFF',
     },
 
     // Slider
