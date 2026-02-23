@@ -1,4 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import polyline from "@mapbox/polyline";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
@@ -105,90 +106,60 @@ const calculateJourneyStats = (history: JourneyHistoryPoint[]) => {
 const GOOGLE_MAPS_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
 
 const decodePolyline = (encoded: string) => {
-    let points: { latitude: number; longitude: number }[] = [];
-    let index = 0, len = encoded.length;
-    let lat = 0, lng = 0;
-
-    while (index < len) {
-        let b, shift = 0, result = 0;
-        do {
-            b = encoded.charCodeAt(index++) - 63;
-            result |= (b & 0x1f) << shift;
-            shift += 5;
-        } while (b >= 0x20);
-        let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-        lat += dlat;
-
-        shift = 0;
-        result = 0;
-        do {
-            b = encoded.charCodeAt(index++) - 63;
-            result |= (b & 0x1f) << shift;
-            shift += 5;
-        } while (b >= 0x20);
-        let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-        lng += dlng;
-
-        points.push({ latitude: (lat / 1E5), longitude: (lng / 1E5) });
-    }
-    return points;
+    return polyline.decode(encoded).map(([lat, lng]: [number, number]) => ({
+        latitude: lat,
+        longitude: lng,
+    }));
 };
 
-const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]) => {
-    if (historyCoords.length < 2) return null;
+interface PathSegment {
+    coords: { latitude: number; longitude: number }[];
+    isOffRoad: boolean;
+}
+
+const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]): Promise<PathSegment[]> => {
+    if (historyCoords.length < 2) return [];
 
     try {
+        // Step 1: Request road-following route from Google Directions API
         const origin = `${historyCoords[0].latitude},${historyCoords[0].longitude}`;
         const destination = `${historyCoords[historyCoords.length - 1].latitude},${historyCoords[historyCoords.length - 1].longitude}`;
 
-        let waypoints: string[] = [];
+        // Get intermediate points (max 23 waypoints)
+        let waypointsStr = "";
         if (historyCoords.length > 2) {
-            // Sampling more points (max 23 intermediate) for better path fidelity
             const maxWaypoints = 23;
+            let sampledWaypoints = [];
             if (historyCoords.length <= maxWaypoints + 2) {
-                waypoints = historyCoords.slice(1, -1).map(p => `${p.latitude},${p.longitude}`);
+                sampledWaypoints = historyCoords.slice(1, -1);
             } else {
                 const step = (historyCoords.length - 2) / maxWaypoints;
                 for (let i = 0; i < maxWaypoints; i++) {
                     const idx = Math.floor(1 + i * step);
-                    const p = historyCoords[idx];
-                    waypoints.push(`${p.latitude},${p.longitude}`);
+                    sampledWaypoints.push(historyCoords[idx]);
                 }
             }
+            waypointsStr = `&waypoints=${sampledWaypoints.map(p => `${p.latitude},${p.longitude}`).join("|")}`;
         }
 
-        const waypointsStr = waypoints.length > 0 ? `&waypoints=${waypoints.join("|")}` : "";
         const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypointsStr}&key=${GOOGLE_MAPS_API_KEY}&mode=driving`;
 
-        const response = await fetch(url).catch(() => null);
-        if (!response) return null;
-        const data = await response.json().catch(() => ({}));
+        const response = await fetch(url);
+        const data = await response.json();
 
         if (data.status === "OK" && data.routes.length > 0) {
-            // Combine all steps for high-resolution road-following path
-            const route = data.routes[0];
-            let fullPath: { latitude: number; longitude: number }[] = [];
-
-            route.legs.forEach((leg: any) => {
-                leg.steps.forEach((step: any) => {
-                    const stepCoords = decodePolyline(step.polyline.points);
-                    fullPath.push(...stepCoords);
-                });
-            });
-
-            // Filter out near-identical points to optimize rendering
-            return fullPath.filter((point, index, self) =>
-                index === 0 ||
-                Math.abs(point.latitude - self[index - 1].latitude) > 0.00001 ||
-                Math.abs(point.longitude - self[index - 1].longitude) > 0.00001
-            );
+            const encodedPoints = data.routes[0].overview_polyline.points;
+            const roadPoints = decodePolyline(encodedPoints);
+            return [{ coords: roadPoints, isOffRoad: false }];
         } else {
-            console.warn("Directions API returned non-OK status:", data.status, data.error_message);
+            console.warn("Directions API status:", data.status, data.error_message);
         }
     } catch (e) {
-        console.warn("Failed to fetch route directions:", e);
+        console.warn("Failed to fetch Directions route:", e);
     }
-    return null;
+
+    // Fallback to raw history coords if Directions fails
+    return [{ coords: historyCoords, isOffRoad: true }];
 };
 
 // Check if a journey is likely a "Stay" based on displacement and distance
@@ -207,11 +178,7 @@ const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
     const stats = calculateJourneyStats(history);
     const totalDistanceMeters = parseFloat(stats.distanceMiles) * 1609.34;
 
-    // If they haven't moved more than 150m from start to end, and top speed is low
-    // it's likely just drift or walking around a property
     if (displacementMeters < 150 && stats.topSpeedMph < 10) return true;
-
-    // If total distance is extremely low
     if (totalDistanceMeters < 200) return true;
 
     return false;
@@ -219,7 +186,7 @@ const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
 
 const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
     const mapRef = React.useRef<MapView>(null);
-    const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+    const [segments, setSegments] = useState<PathSegment[]>([]);
 
     const historyCoords = useMemo(() => (history || []).map(p => ({
         latitude: Number(p.latitude),
@@ -230,18 +197,14 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
         let isMounted = true;
         const getRoute = async () => {
             if (historyCoords.length < 2) return;
-            const coords = await fetchRoute(historyCoords);
-            if (isMounted && coords) {
-                setRouteCoords(coords);
+            const res = await fetchRoute(historyCoords);
+            if (isMounted && res) {
+                setSegments(res);
             }
         };
         getRoute();
         return () => { isMounted = false; };
     }, [historyCoords]);
-
-    // ONLY show coordinates returned by Google Directions (road-following)
-    // Avoid falling back to raw historyCoords to keep paths clean and avoid "nests" at houses
-    const displayCoords = routeCoords;
 
     const handleMapReady = () => {
         if (historyCoords.length > 0) {
@@ -272,16 +235,18 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
                     longitudeDelta: 0.05,
                 } : undefined}
             >
-                {displayCoords.length > 1 && (
+                {segments.map((seg, idx) => (
                     <Polyline
-                        coordinates={displayCoords}
+                        key={idx}
+                        coordinates={seg.coords}
                         strokeWidth={4}
-                        strokeColor={COLORS.primary}
+                        strokeColor={seg.isOffRoad ? "#EF4444" : COLORS.primary}
+                        lineDashPattern={seg.isOffRoad ? [10, 10] : undefined}
                         lineJoin="round"
                         lineCap="round"
                         geodesic={true}
                     />
-                )}
+                ))}
                 {historyCoords.length > 0 && (
                     <>
                         {/* Start Point: Square */}
@@ -463,7 +428,6 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
         const timeRange = formatTimeRange(item.startTime, item.endTime);
 
         // Determine if it's a "Stay" or a "Trip"
-        // Use displacement and speed to filter out GPS drift at "homes and other places"
         const isStay = isStationaryJourney(item.history || []);
 
         if (isStay) {
