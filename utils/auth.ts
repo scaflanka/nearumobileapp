@@ -1,7 +1,11 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 
-export const API_BASE_URL = "https://api.medi.lk/api";
+// export const API_BASE_URL = "https://api.medi.lk/api";
+
+export const API_BASE_URL = "https://nearu.servefamily.com/api";
+
+
 
 /**
  * Logs out the user by calling the logout API endpoint, clearing all stored tokens and user data,

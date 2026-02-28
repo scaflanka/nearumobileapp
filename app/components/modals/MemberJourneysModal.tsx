@@ -17,7 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
 import { CircleMember, Journey, JourneyHistoryPoint } from "../../types/models";
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 interface MemberJourneysModalProps {
     isOpen: boolean;
@@ -36,6 +36,8 @@ const COLORS = {
     white: "#FFFFFF",
     blueLight: "#E8F0FE",
     error: "#EF4444",
+    roadBlue: "#4285F4",
+    pinRed: "#EA4335",
 };
 
 // --- Helpers ---
@@ -105,6 +107,71 @@ const calculateJourneyStats = (history: JourneyHistoryPoint[]) => {
 // --- Route Helpers ---
 const GOOGLE_MAPS_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
 
+const fetchJourneyStatsFromMatrix = async (history: JourneyHistoryPoint[]) => {
+    if (history.length < 2) return null;
+
+    const origin = history[0];
+    const destination = history[history.length - 1];
+
+    const requestBody = {
+        origins: [{
+            waypoint: {
+                location: {
+                    latLng: {
+                        latitude: Number(origin.latitude),
+                        longitude: Number(origin.longitude)
+                    }
+                }
+            }
+        }],
+        destinations: [{
+            waypoint: {
+                location: {
+                    latLng: {
+                        latitude: Number(destination.latitude),
+                        longitude: Number(destination.longitude)
+                    }
+                }
+            }
+        }],
+        travelMode: "DRIVE",
+        routingPreference: "TRAFFIC_UNAWARE"
+    };
+
+    try {
+        const response = await fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,condition"
+            },
+            body: JSON.stringify(requestBody),
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data[0]) {
+            const result = data[0];
+            const distanceMiles = (result.distanceMeters / 1609.34).toFixed(1);
+
+            const seconds = parseInt((result.duration || "0s").replace('s', ''));
+            const mins = Math.round(seconds / 60);
+
+            return {
+                distanceMiles,
+                duration: mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`,
+                rawMeters: result.distanceMeters,
+                rawSeconds: seconds
+            };
+        }
+    } catch (e) {
+        console.warn("Matrix API error:", e);
+    }
+
+    return null;
+};
+
 const decodePolyline = (encoded: string) => {
     return polyline.decode(encoded).map(([lat, lng]: [number, number]) => ({
         latitude: lat,
@@ -112,64 +179,74 @@ const decodePolyline = (encoded: string) => {
     }));
 };
 
-interface PathSegment {
-    coords: { latitude: number; longitude: number }[];
-    isOffRoad: boolean;
-}
-
-const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]): Promise<PathSegment[]> => {
-    if (historyCoords.length < 2) return [];
+const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]): Promise<{ latitude: number, longitude: number }[]> => {
+    if (historyCoords.length < 2) return historyCoords;
 
     try {
-        // Step 1: Request road-following route from Google Directions API
-        const origin = `${historyCoords[0].latitude},${historyCoords[0].longitude}`;
-        const destination = `${historyCoords[historyCoords.length - 1].latitude},${historyCoords[historyCoords.length - 1].longitude}`;
+        const origin = historyCoords[0];
+        const destination = historyCoords[historyCoords.length - 1];
 
-        // Get intermediate points (max 23 waypoints)
-        let waypointsStr = "";
+        // Sample points to stay within Google's 25-intermediate limit
+        let intermediates: any[] = [];
         if (historyCoords.length > 2) {
-            const maxWaypoints = 23;
-            let sampledWaypoints = [];
-            if (historyCoords.length <= maxWaypoints + 2) {
-                sampledWaypoints = historyCoords.slice(1, -1);
-            } else {
-                const step = (historyCoords.length - 2) / maxWaypoints;
-                for (let i = 0; i < maxWaypoints; i++) {
-                    const idx = Math.floor(1 + i * step);
-                    sampledWaypoints.push(historyCoords[idx]);
-                }
+            const middlePoints = historyCoords.slice(1, -1);
+            const maxIntermediates = 23;
+
+            const sampled = [];
+            const step = Math.max(1, Math.floor(middlePoints.length / maxIntermediates));
+
+            for (let i = 0; i < middlePoints.length && sampled.length < maxIntermediates; i += step) {
+                sampled.push(middlePoints[i]);
             }
-            waypointsStr = `&waypoints=${sampledWaypoints.map(p => `${p.latitude},${p.longitude}`).join("|")}`;
+
+            intermediates = sampled.map(p => ({
+                location: {
+                    latLng: {
+                        latitude: Number(p.latitude),
+                        longitude: Number(p.longitude)
+                    }
+                },
+                via: true
+            }));
         }
 
-        const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypointsStr}&key=${GOOGLE_MAPS_API_KEY}&mode=driving`;
+        const requestBody = {
+            origin: { location: { latLng: { latitude: Number(origin.latitude), longitude: Number(origin.longitude) } } },
+            destination: { location: { latLng: { latitude: Number(destination.latitude), longitude: Number(destination.longitude) } } },
+            intermediates: intermediates,
+            travelMode: "DRIVE",
+            routingPreference: "TRAFFIC_UNAWARE",
+            computeAlternativeRoutes: false,
+        };
 
-        const response = await fetch(url);
+        const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": "routes.polyline.encodedPolyline"
+            },
+            body: JSON.stringify(requestBody),
+        });
+
         const data = await response.json();
 
-        if (data.status === "OK" && data.routes.length > 0) {
-            const encodedPoints = data.routes[0].overview_polyline.points;
-            const roadPoints = decodePolyline(encodedPoints);
-            return [{ coords: roadPoints, isOffRoad: false }];
-        } else {
-            console.warn("Directions API status:", data.status, data.error_message);
+        if (response.ok && data.routes?.[0]?.polyline?.encodedPolyline) {
+            return decodePolyline(data.routes[0].polyline.encodedPolyline);
         }
     } catch (e) {
-        console.warn("Failed to fetch Directions route:", e);
+        console.warn("Route fetch error:", e);
     }
 
-    // Fallback to raw history coords if Directions fails
-    return [{ coords: historyCoords, isOffRoad: true }];
+    return historyCoords; // Fallback to straight lines if API fails
 };
 
-// Check if a journey is likely a "Stay" based on displacement and distance
 const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
     if (!history || history.length < 2) return true;
 
     const start = history[0];
     const end = history[history.length - 1];
 
-    // Displacement: Straight line distance between start and end
     const displacementMeters = haversineDistanceMeters(
         Number(start.latitude), Number(start.longitude),
         Number(end.latitude), Number(end.longitude)
@@ -186,7 +263,7 @@ const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
 
 const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
     const mapRef = React.useRef<MapView>(null);
-    const [segments, setSegments] = useState<PathSegment[]>([]);
+    const [roadCoords, setRoadCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
     const historyCoords = useMemo(() => (history || []).map(p => ({
         latitude: Number(p.latitude),
@@ -195,15 +272,33 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
 
     useEffect(() => {
         let isMounted = true;
-        const getRoute = async () => {
-            if (historyCoords.length < 2) return;
-            const res = await fetchRoute(historyCoords);
-            if (isMounted && res) {
-                setSegments(res);
+        const getRoadPath = async () => {
+            if (historyCoords.length < 2) {
+                setRoadCoords(historyCoords);
+                return;
+            }
+            const snapped = await fetchRoute(historyCoords);
+            if (isMounted) {
+                setRoadCoords(snapped);
             }
         };
-        getRoute();
+        getRoadPath();
         return () => { isMounted = false; };
+    }, [historyCoords]);
+
+    // Sample markers to avoid cluttering if history is very long
+    // Displaying every ~5th point or max 15 points to keep numbers readable
+    const sampledMarkers = useMemo(() => {
+        if (historyCoords.length <= 15) return historyCoords.map((c, i) => ({ ...c, label: i + 1 }));
+
+        const sampled = [];
+        const step = Math.floor(historyCoords.length / 14);
+        for (let i = 0; i < historyCoords.length - 1; i += step) {
+            sampled.push({ ...historyCoords[i], label: i + 1 });
+        }
+        // Always include the last point
+        sampled.push({ ...historyCoords[historyCoords.length - 1], label: historyCoords.length });
+        return sampled;
     }, [historyCoords]);
 
     const handleMapReady = () => {
@@ -235,30 +330,27 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
                     longitudeDelta: 0.05,
                 } : undefined}
             >
-                {segments.map((seg, idx) => (
-                    <Polyline
+                {/* Road-snapped connecting line */}
+                <Polyline
+                    coordinates={roadCoords.length > 0 ? roadCoords : historyCoords}
+                    strokeWidth={5}
+                    strokeColor={COLORS.roadBlue}
+                    lineJoin="round"
+                    lineCap="round"
+                    geodesic={true}
+                />
+
+                {sampledMarkers.map((point, idx) => (
+                    <Marker
                         key={idx}
-                        coordinates={seg.coords}
-                        strokeWidth={4}
-                        strokeColor={seg.isOffRoad ? "#EF4444" : COLORS.primary}
-                        lineDashPattern={seg.isOffRoad ? [10, 10] : undefined}
-                        lineJoin="round"
-                        lineCap="round"
-                        geodesic={true}
-                    />
+                        coordinate={point}
+                        anchor={{ x: 0.5, y: 0.5 }}
+                    >
+                        <View style={styles.numberedMarker}>
+                            <Text style={styles.numberedMarkerText}>{point.label}</Text>
+                        </View>
+                    </Marker>
                 ))}
-                {historyCoords.length > 0 && (
-                    <>
-                        {/* Start Point: Square */}
-                        <Marker coordinate={historyCoords[0]} anchor={{ x: 0.5, y: 0.5 }}>
-                            <View style={styles.startSquare} />
-                        </Marker>
-                        {/* End Point: Circle */}
-                        <Marker coordinate={historyCoords[historyCoords.length - 1]} anchor={{ x: 0.5, y: 0.5 }}>
-                            <View style={styles.endCircle} />
-                        </Marker>
-                    </>
-                )}
             </MapView>
 
             <View style={styles.mapControls}>
@@ -276,6 +368,78 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
     );
 };
 
+const JourneyListItem = ({ item }: { item: Journey }) => {
+    const [stats, setStats] = useState(() => calculateJourneyStats(item.history || []));
+    const [duration, setDuration] = useState(() => getDuration(item.startTime, item.endTime));
+    const [isLoadingStats, setIsLoadingStats] = useState(false);
+
+    const timeRange = formatTimeRange(item.startTime, item.endTime);
+    const isStay = isStationaryJourney(item.history || []);
+
+    useEffect(() => {
+        if (isStay || (item.history || []).length < 2) return;
+
+        let isMounted = true;
+        const getMatrixStats = async () => {
+            setIsLoadingStats(true);
+            const matrixRes = await fetchJourneyStatsFromMatrix(item.history!);
+            if (isMounted && matrixRes) {
+                setStats(prev => ({ ...prev, distanceMiles: matrixRes.distanceMiles }));
+                setDuration(matrixRes.duration);
+            }
+            setIsLoadingStats(false);
+        };
+
+        getMatrixStats();
+        return () => { isMounted = false; };
+    }, [item.startTime, isStay]);
+
+    if (isStay) {
+        const stayLocation = item.history?.[0]?.name || "Unknown Location";
+        return (
+            <View style={styles.journeyItem}>
+                <View style={styles.journeyHeader}>
+                    <View style={[styles.journeyIconBox, { backgroundColor: COLORS.secondary }]}>
+                        <Ionicons name="location" size={20} color={COLORS.white} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.stayTitle}>{stayLocation}</Text>
+                        <Text style={styles.journeyTime}>{timeRange} ({duration})</Text>
+                    </View>
+                </View>
+                <TouchableOpacity style={styles.addToPlacesBtn}>
+                    <Text style={styles.addToPlacesText}>Add to Places</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    }
+
+    return (
+        <View style={styles.journeyItem}>
+            <View style={styles.journeyHeader}>
+                <View style={styles.journeyIconBox}>
+                    <Ionicons name="shuffle" size={20} color={COLORS.white} />
+                </View>
+                <View>
+                    <Text style={styles.journeyTitle}>
+                        {stats.distanceMiles} mi Trip {isLoadingStats && "..."}
+                    </Text>
+                    <Text style={styles.journeyTime}>{timeRange} ({duration})</Text>
+                </View>
+            </View>
+
+            <View style={styles.mapPreviewContainer}>
+                <JourneyMapItem history={item.history || []} />
+                <View style={styles.topSpeedPill}>
+                    <MaterialCommunityIcons name="speedometer" size={14} color={COLORS.secondary} />
+                    <Text style={styles.topSpeedPillLabel}>Top Speed</Text>
+                    <Text style={styles.topSpeedPillValue}>{stats.topSpeedMph} mph</Text>
+                </View>
+            </View>
+        </View>
+    );
+};
+
 const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
     isOpen,
     onClose,
@@ -285,6 +449,94 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
     const [loading, setLoading] = useState(false);
     const [memberData, setMemberData] = useState<CircleMember | null>(null);
     const [journeys, setJourneys] = useState<Journey[]>([]);
+    const [batchStats, setBatchStats] = useState<{ totalMiles: string; totalDrives: number; topSpeed: number } | null>(null);
+
+    const updateBatchStats = async (journeyList: Journey[]) => {
+        let totalMilesMeters = 0;
+        let topSpeed = 0;
+        let driveCount = 0;
+
+        const validTrips = journeyList.filter(j => !isStationaryJourney(j.history || []));
+
+        validTrips.forEach(j => {
+            const ls = calculateJourneyStats(j.history || []);
+            if (ls.topSpeedMph > topSpeed) topSpeed = ls.topSpeedMph;
+            totalMilesMeters += (parseFloat(ls.distanceMiles) * 1609.34);
+            driveCount++;
+        });
+
+        setBatchStats({
+            totalMiles: (totalMilesMeters / 1609.34).toFixed(1),
+            totalDrives: driveCount,
+            topSpeed
+        });
+
+        if (validTrips.length === 0) return;
+
+        try {
+            const batchSize = Math.min(validTrips.length, 25);
+            const batch = validTrips.slice(0, batchSize);
+
+            const requestBody = {
+                origins: batch.map(j => ({
+                    waypoint: {
+                        location: {
+                            latLng: {
+                                latitude: Number(j.history![0].latitude),
+                                longitude: Number(j.history![0].longitude)
+                            }
+                        }
+                    }
+                })),
+                destinations: batch.map(j => ({
+                    waypoint: {
+                        location: {
+                            latLng: {
+                                latitude: Number(j.history![j.history!.length - 1].latitude),
+                                longitude: Number(j.history![j.history!.length - 1].longitude)
+                            }
+                        }
+                    }
+                })),
+                travelMode: "DRIVE",
+                routingPreference: "TRAFFIC_UNAWARE"
+            };
+
+            const response = await fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                    "X-Goog-FieldMask": "originIndex,destinationIndex,distanceMeters"
+                },
+                body: JSON.stringify(requestBody),
+            });
+
+            const data = await response.json();
+            if (response.ok && Array.isArray(data)) {
+                let accurateMeters = 0;
+                data.forEach((element: any) => {
+                    if (element.originIndex === element.destinationIndex) {
+                        accurateMeters += (element.distanceMeters || 0);
+                    }
+                });
+
+                if (validTrips.length > batchSize) {
+                    validTrips.slice(batchSize).forEach(j => {
+                        const ls = calculateJourneyStats(j.history || []);
+                        accurateMeters += (parseFloat(ls.distanceMiles) * 1609.34);
+                    });
+                }
+
+                setBatchStats(prev => ({
+                    ...prev!,
+                    totalMiles: (accurateMeters / 1609.34).toFixed(1)
+                }));
+            }
+        } catch (e) {
+            console.warn("Batch Matrix API error:", e);
+        }
+    };
 
     const fetchHistory = useCallback(async () => {
         if (!circleId || !memberId) return;
@@ -309,6 +561,7 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                 if (foundMember) {
                     setMemberData(foundMember);
                     setJourneys(foundMember.journeys || []);
+                    updateBatchStats(foundMember.journeys || []);
                 }
             }
         } catch (error) {
@@ -324,24 +577,10 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
         }
     }, [isOpen, fetchHistory]);
 
-    const weeklyStats = useMemo(() => {
-        let topSpeed = 0;
-        let totalMiles = 0;
-        let totalDrives = 0;
-
-        journeys.forEach(j => {
-            const stats = calculateJourneyStats(j.history || []);
-            if (stats.topSpeedMph > topSpeed) topSpeed = stats.topSpeedMph;
-            totalMiles += parseFloat(stats.distanceMiles);
-            if (parseFloat(stats.distanceMiles) > 0.1) totalDrives++;
-        });
-
-        return {
-            topSpeed: topSpeed || 0,
-            totalDrives,
-            totalMiles: totalMiles.toFixed(1)
-        };
-    }, [journeys]);
+    const weeklyStatsDisplay = useMemo(() => {
+        if (batchStats) return batchStats;
+        return { topSpeed: 0, totalDrives: 0, totalMiles: "0.0" };
+    }, [batchStats]);
 
     if (!isOpen) return null;
 
@@ -401,78 +640,26 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                     <View style={styles.statIconCircle}>
                         <MaterialCommunityIcons name="speedometer" size={24} color={COLORS.white} />
                     </View>
-                    <Text style={styles.statValue}>{weeklyStats.topSpeed} mph</Text>
+                    <Text style={styles.statValue}>{weeklyStatsDisplay.topSpeed} mph</Text>
                     <Text style={styles.statLabel}>Top Speed</Text>
                 </View>
                 <View style={styles.statBox}>
                     <View style={styles.statIconCircle}>
                         <MaterialCommunityIcons name="car-side" size={24} color={COLORS.white} />
                     </View>
-                    <Text style={styles.statValue}>{weeklyStats.totalDrives}</Text>
+                    <Text style={styles.statValue}>{weeklyStatsDisplay.totalDrives}</Text>
                     <Text style={styles.statLabel}>Total Drives</Text>
                 </View>
                 <View style={styles.statBox}>
                     <View style={styles.statIconCircle}>
                         <MaterialCommunityIcons name="map-marker-distance" size={24} color={COLORS.white} />
                     </View>
-                    <Text style={styles.statValue}>{weeklyStats.totalMiles} mi</Text>
+                    <Text style={styles.statValue}>{weeklyStatsDisplay.totalMiles} mi</Text>
                     <Text style={styles.statLabel}>Total Miles</Text>
                 </View>
             </View>
         </View>
     );
-
-    const renderJourneyItem = ({ item }: { item: Journey }) => {
-        const stats = calculateJourneyStats(item.history || []);
-        const durationStr = getDuration(item.startTime, item.endTime);
-        const timeRange = formatTimeRange(item.startTime, item.endTime);
-
-        // Determine if it's a "Stay" or a "Trip"
-        const isStay = isStationaryJourney(item.history || []);
-
-        if (isStay) {
-            const stayLocation = item.history?.[0]?.name || "Unknown Location";
-            return (
-                <View style={styles.journeyItem}>
-                    <View style={styles.journeyHeader}>
-                        <View style={[styles.journeyIconBox, { backgroundColor: COLORS.secondary }]}>
-                            <Ionicons name="location" size={20} color={COLORS.white} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.stayTitle}>{stayLocation}</Text>
-                            <Text style={styles.journeyTime}>{timeRange} ({durationStr})</Text>
-                        </View>
-                    </View>
-                    <TouchableOpacity style={styles.addToPlacesBtn}>
-                        <Text style={styles.addToPlacesText}>Add to Places</Text>
-                    </TouchableOpacity>
-                </View>
-            );
-        }
-
-        return (
-            <View style={styles.journeyItem}>
-                <View style={styles.journeyHeader}>
-                    <View style={styles.journeyIconBox}>
-                        <Ionicons name="shuffle" size={20} color={COLORS.white} />
-                    </View>
-                    <View>
-                        <Text style={styles.journeyTitle}>{stats.distanceMiles} mi Trip</Text>
-                        <Text style={styles.journeyTime}>{timeRange} ({durationStr})</Text>
-                    </View>
-                </View>
-
-                <View style={styles.mapPreviewContainer}>
-                    <JourneyMapItem history={item.history || []} />
-                    <View style={styles.topSpeedPill}>
-                        <MaterialCommunityIcons name="speedometer" size={14} color={COLORS.secondary} />
-                        <Text style={styles.topSpeedPillLabel}>Top Speed</Text>
-                        <Text style={styles.topSpeedPillValue}>{stats.topSpeedMph} mph</Text>
-                    </View>
-                </View>
-            </View>
-        );
-    };
 
     return (
         <Modal
@@ -490,14 +677,14 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                 ) : (
                     <FlatList
                         data={journeys}
-                        keyExtractor={(item, index) => index.toString()}
+                        keyExtractor={(item, index) => item.startTime || index.toString()}
                         ListHeaderComponent={
                             <>
                                 {renderProfileBar()}
                                 {renderStatsSummary()}
                             </>
                         }
-                        renderItem={renderJourneyItem}
+                        renderItem={({ item }) => <JourneyListItem item={item} />}
                         contentContainerStyle={styles.listContent}
                         ListEmptyComponent={
                             <View style={styles.emptyContainer}>
@@ -665,31 +852,26 @@ const styles = StyleSheet.create({
     emptyTitle: { fontSize: 18, fontWeight: '700', color: COLORS.textMain, marginTop: 16 },
     emptyText: { fontSize: 14, color: COLORS.textSub, textAlign: 'center', marginTop: 8 },
 
-    // New Map Styles
-    startSquare: {
-        width: 14,
-        height: 14,
-        backgroundColor: COLORS.primary,
+    // Numbered Journey Points
+    numberedMarker: {
+        width: 20,
+        height: 20,
+        borderRadius: 10,
+        backgroundColor: COLORS.roadBlue,
         borderWidth: 2,
         borderColor: COLORS.white,
+        justifyContent: 'center',
+        alignItems: 'center',
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-        elevation: 5,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 1.41,
+        elevation: 2,
     },
-    endCircle: {
-        width: 14,
-        height: 14,
-        borderRadius: 7,
-        backgroundColor: COLORS.primary,
-        borderWidth: 2,
-        borderColor: COLORS.white,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-        elevation: 5,
+    numberedMarkerText: {
+        color: COLORS.white,
+        fontSize: 10,
+        fontWeight: '900',
     },
     mapControls: {
         position: 'absolute',

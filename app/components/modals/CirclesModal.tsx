@@ -176,6 +176,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
     const [invitations, setInvitations] = useState<InvitationData[]>([]);
     const [loadingInvitations, setLoadingInvitations] = useState(false);
     const [refreshingInvitations, setRefreshingInvitations] = useState(false);
+    const [error, setError] = useState("");
     const lastHandledShareRequestId = useRef<number | null>(null);
 
     useEffect(() => {
@@ -250,6 +251,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
         setJoiningCircle(false);
         setGeneratingCode(false);
         setOtp(new Array(6).fill(""));
+        setError("");
     };
 
     const handleCircleSelect = async (id: number | string) => {
@@ -265,18 +267,19 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
     };
 
     const handleCreateCircle = async (nameToUse?: string) => {
-        const name = nameToUse ?? newCircleName;
-        if (!name || !name.trim()) {
-            showAlert({ title: "Required", message: "Please enter a name for the circle.", type: 'warning' });
+        const name = (nameToUse ?? newCircleName).trim();
+        if (!name) {
+            setError("Please enter a name for the circle.");
             return;
         }
 
         if (!relationship) {
-            showAlert({ title: "Required", message: "Please select your relationship.", type: 'warning' });
+            setError("Please select your relationship.");
             return;
         }
 
         setCreatingCircle(true);
+        setError("");
         try {
             const body: any = {
                 name: name.trim(),
@@ -294,12 +297,13 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
 
             if (!createResponse.ok) {
                 const err = await createResponse.json().catch(() => ({}));
-                showAlert({ title: "Error", message: err.message || "Failed to create circle.", type: 'error' });
+                setError(err.message || "Failed to create circle.");
                 return;
             }
 
             const createData = await createResponse.json();
             const circlePayload = extractCirclePayload(createData);
+            setError("");
             setCreatedCircleData(circlePayload);
 
             if (circlePayload?.id) {
@@ -347,7 +351,7 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
             if (onRefresh) onRefresh();
         } catch (error) {
             console.error("Error creating circle:", error);
-            showAlert({ title: "Error", message: "Connection failed.", type: 'error' });
+            setError("Connection failed. Please try again.");
         } finally {
             setCreatingCircle(false);
         }
@@ -642,9 +646,13 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
                     placeholder="My Family"
                     placeholderTextColor="#9CA3AF"
                     value={newCircleName}
-                    onChangeText={setNewCircleName}
+                    onChangeText={(text) => {
+                        setNewCircleName(text);
+                        setError("");
+                    }}
                     autoFocus
                 />
+                {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
                 <View style={styles.privacyBox}>
                     <Text style={styles.privacyTitle}>Privacy First:</Text>
@@ -663,7 +671,10 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
                             styles.radioButtonRow,
                             relationship === option.value && styles.radioButtonRowSelected
                         ]}
-                        onPress={() => setRelationship(option.value)}
+                        onPress={() => {
+                            setRelationship(option.value);
+                            setError("");
+                        }}
                     >
                         <View style={[
                             styles.radioButtonCircle,
@@ -684,7 +695,10 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
             <Text style={[styles.suggestionLabel, { marginTop: 20 }]}>Suggestions:</Text>
             <View style={styles.suggestionRow}>
                 {CIRCLE_NAME_SUGGESTIONS.map((name) => (
-                    <TouchableOpacity key={name} style={styles.suggestionChip} onPress={() => handleCreateCircle(name)}>
+                    <TouchableOpacity key={name} style={styles.suggestionChip} onPress={() => {
+                        setNewCircleName(name);
+                        setError("");
+                    }}>
                         <Text style={styles.suggestionText}>+ {name}</Text>
                     </TouchableOpacity>
                 ))}
@@ -1077,4 +1091,11 @@ const styles = StyleSheet.create({
     radioButtonInner: { height: 10, width: 10, borderRadius: 5, backgroundColor: '#113C9C' },
     radioButtonLabel: { fontSize: 16, color: '#333' },
     radioButtonLabelSelected: { color: '#113C9C', fontWeight: '600' },
+    errorText: {
+        fontSize: 12,
+        color: '#EF4444',
+        marginTop: -10,
+        marginBottom: 10,
+        marginLeft: 4,
+    },
 });

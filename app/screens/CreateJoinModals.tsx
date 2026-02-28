@@ -195,7 +195,10 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({
                 <TouchableOpacity
                   key={name}
                   style={styles.suggestionChip}
-                  onPress={() => handleCreate(name)}
+                  onPress={() => {
+                    setCircleName(name);
+                    setError("");
+                  }}
                 >
                   <Text style={styles.suggestionText}>+ {name}</Text>
                 </TouchableOpacity>
