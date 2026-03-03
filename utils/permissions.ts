@@ -5,7 +5,9 @@ import { PermissionsAndroid, Platform } from 'react-native';
 import { authenticatedFetch } from './auth';
 
 // const API_BASE_URL = "https://api.medi.lk/api";
-const API_BASE_URL = "https://nearu.servefamily.com/api";
+// const API_BASE_URL = "https://nearu.servefamily.com/api";
+
+export const API_BASE_URL = "https://nearu.kalametiyaseafoodrestaurant.com/api";
 const LAST_SAVED_FCM_TOKEN_KEY = "lastSavedFcmToken";
 const LAST_FCM_RATE_LIMIT_TS_KEY = "lastFcmRateLimitTs";
 const FCM_RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes

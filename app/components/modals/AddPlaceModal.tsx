@@ -19,7 +19,7 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-import MapView, { Circle, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import MapView, { Circle, Region } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface GeocodeSuggestion {
@@ -280,7 +280,6 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
     const [isNotifyOnArrival, setIsNotifyOnArrival] = useState(true);
     const [isNotifyOnDeparture, setIsNotifyOnDeparture] = useState(true);
-    const [mapType, setMapType] = useState<"standard" | "satellite">("standard");
     const [selectedPlaceType, setSelectedPlaceType] = useState<string>("Home");
 
     const hasHydratedRef = useRef(false);
@@ -599,17 +598,11 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
 
     const handleRegionChangeComplete = useCallback(
         (region: Region) => {
-            if (region.latitudeDelta < 0.02) {
-                if (mapType !== 'satellite') setMapType('satellite');
-            } else {
-                if (mapType === 'satellite') setMapType('standard');
-            }
-
             if (isSavingLocation) return;
-            // distinct from "animate to region" - user moved map manually
+            // No-op satellite switch for pure OSM
             updateSelectedLocation(region.latitude, region.longitude, undefined, false, false, false);
         },
-        [isSavingLocation, updateSelectedLocation, mapType]
+        [isSavingLocation, updateSelectedLocation]
     );
 
     const handleRadiusSliderChange = useCallback((value: number | number[]) => {
@@ -852,13 +845,13 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                             <View style={styles.mapWrapper}>
                                 <MapView
                                     ref={mapRef}
-                                    provider={PROVIDER_GOOGLE}
                                     style={styles.map}
                                     initialRegion={initialRegion}
-                                    showsUserLocation={canShowUserLocation}
-                                    showsMyLocationButton={canShowUserLocation}
+                                    mapType="standard"
                                     onRegionChangeComplete={handleRegionChangeComplete}
-                                    mapType={mapType}
+                                    showsUserLocation={false}
+                                    rotateEnabled={false}
+                                    pitchEnabled={false}
                                 >
                                     {selectedLocation && (
                                         <Circle

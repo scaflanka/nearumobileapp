@@ -3,7 +3,10 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 
 // export const API_BASE_URL = "https://api.medi.lk/api";
 
-export const API_BASE_URL = "https://nearu.servefamily.com/api";
+// export const API_BASE_URL = "https://nearu.servefamily.com/api";
+export const API_BASE_URL = "https://nearu.kalametiyaseafoodrestaurant.com/api";
+
+
 
 
 

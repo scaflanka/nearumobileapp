@@ -24,7 +24,7 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
-import MapView, { Circle, Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Circle, Marker, Polyline } from "react-native-maps";
 import { isBackgroundLocationRunning, startBackgroundLocation, stopBackgroundLocation } from "../../services/BackgroundLocationService";
 import { useAlert } from "../context/AlertContext";
 
@@ -128,7 +128,6 @@ function splitIntoJourneys(history: LocationHistoryEntry[]): LocationHistoryEntr
 }
 
 
-import { MAP_THEME_LIGHT } from "../constants/MapThemes";
 
 
 
@@ -157,6 +156,7 @@ const STORAGE_KEYS = {
   lastSelectedCircleId: "mapScreen:lastSelectedCircleId",
   locationSharingEnabled: "user_location_sharing_enabled",
   notificationsEnabled: "user_notifications_enabled",
+  mapStyle: "user_map_style",
 };
 
 const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task";
@@ -179,7 +179,9 @@ const LOW_BATTERY_THRESHOLD = 20;
 const LOCATION_HISTORY_LIMIT = 100; // Limit for history items per fetch
 // Google Maps API Key directly from app.json/config or hardcoded if necessary for reliability in this context
 // In a real app, use Constants.expoConfig or similar, but for immediate stability we use the key found in app.json.
-const GOOGLE_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
+// Google Maps API Key removed as we migrated to OSM/Nominatim/OSRM.
+// If needed for other features, add back here.
+const NOMINATIM_BASE_URL = "https://nominatim.openstreetmap.org";
 
 
 
@@ -431,23 +433,26 @@ const clearAllPostedLocations = async (): Promise<void> => {
   await AsyncStorage.removeItem(LAST_POSTED_LOCATION_STORAGE_KEY).catch(() => undefined);
 };
 
-// --- Google Maps Geocoding Helper ---
-const getLocationNameFromGoogle = async (latitude: number, longitude: number): Promise<string> => {
+// --- OSM Geocoding Helper ---
+const getLocationNameFromOSM = async (latitude: number, longitude: number): Promise<string> => {
   try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${GOOGLE_API_KEY}`;
-    const response = await fetch(url);
+    const url = `${NOMINATIM_BASE_URL}/reverse?format=json&lat=${latitude}&lon=${longitude}`;
+    const response = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'NearuApp/1.0'
+      }
+    });
     const data = await response.json();
 
-    if (data.status === "OK" && data.results && data.results.length > 0) {
-      // Try to find a specific type of address (e.g., street_address, neighborhood) or just take the formatted_address of the first result
-      const result = data.results[0];
-      return result.formatted_address || "Unknown Location";
+    if (data && data.display_name) {
+      return data.display_name;
     } else {
-      console.warn("Geocoding failed or returned no results:", data.status);
+      console.warn("Nominatim reverse geocoding returned no display_name");
       return "Unknown Location";
     }
   } catch (error) {
-    console.warn("Error fetching location name:", error);
+    console.warn("Error fetching location name from OSM:", error);
     return "Unknown Location";
   }
 };
@@ -490,7 +495,7 @@ const maybePostCircleLocationUpdate = async (
   }
 
   // Fetch real location name
-  const realLocationName = await getLocationNameFromGoogle(latitude, longitude);
+  const realLocationName = await getLocationNameFromOSM(latitude, longitude);
 
   const response = await authenticatedFetch(`${API_BASE_URL}/profile/circles/${circleId}/location`, {
     method: "POST",
@@ -2045,7 +2050,7 @@ const buildMemberLocationMap = (circlePayload: any, members: CircleMember[]): Re
   return map;
 };
 
-type MapType = 'standard' | 'satellite' | 'hybrid' | 'terrain';
+type MapStyle = 'standard' | 'satellite' | 'hybrid' | 'terrain';
 
 const isValidCoordinate = (lat: number, lon: number) => {
   return typeof lat === "number" && typeof lon === "number" && !isNaN(lat) && !isNaN(lon);
@@ -2159,7 +2164,6 @@ const MapScreen: React.FC = () => {
   const [memberAvatarUrls, setMemberAvatarUrls] = useState<Record<string, string | null>>({});
   const [activeTab, setActiveTab] = useState("Location");
 
-  const [mapLayerStyle, setMapLayerStyle] = useState<MapType>('standard');
   const mapRef = useRef<MapView | null>(null);
   const locationHistoryMapRef = useRef<MapView | null>(null);
   const insets = useSafeAreaInsets();
@@ -2236,6 +2240,7 @@ const MapScreen: React.FC = () => {
   const [editedMemberRelation, setEditedMemberRelation] = useState("Other");
   const [isSavingMemberChanges, setIsSavingMemberChanges] = useState(false);
   const [memberModalError, setMemberModalError] = useState<string | null>(null);
+  const [mapLayerStyle, setMapLayerStyle] = useState<MapStyle>('standard');
   const [isMapStyleModalOpen, setIsMapStyleModalOpen] = useState(false);
   const [isCirclesSelectionModalOpen, setIsCirclesSelectionModalOpen] = useState(false);
   const [isLocationHistoryModalVisible, setIsLocationHistoryModalVisible] = useState(false);
@@ -2589,6 +2594,11 @@ const MapScreen: React.FC = () => {
         await setNotificationReceptionEnabled(initialNotifications);
         if (initialNotifications) {
           await requestNotificationPermissions();
+        }
+
+        const storedMapStyle = await AsyncStorage.getItem(STORAGE_KEYS.mapStyle);
+        if (storedMapStyle && ['standard', 'satellite', 'hybrid', 'terrain'].includes(storedMapStyle)) {
+          setMapLayerStyle(storedMapStyle as MapStyle);
         }
       } catch (error) {
         if (!cancelled) {
@@ -3314,6 +3324,8 @@ const MapScreen: React.FC = () => {
         headers: { "Content-Type": "application/json" },
       });
 
+      console.log("Fetch circles response status:", res.status);
+
       if (res.status === 401) {
         console.log("Unauthorized access - redirecting to login");
         loadingCirclesRef.current = false;
@@ -3323,11 +3335,14 @@ const MapScreen: React.FC = () => {
       }
 
       if (!res.ok) {
-        console.error("Failed to fetch circles. Status:", res.status);
+        const errorText = await res.text().catch(() => "Could not read error body");
+        console.error("Failed to fetch circles. Status:", res.status, "Body:", errorText);
+        showAlert({ title: "Fetch Error", message: `Failed to load circles (Status: ${res.status}). ${errorText.substring(0, 100)}`, type: 'error' });
         return;
       }
 
       const data = await res.json();
+      console.log("Circles data received:", JSON.stringify(data));
 
       // Handle various response structures
       let list: CircleData[] = [];
@@ -3335,8 +3350,12 @@ const MapScreen: React.FC = () => {
         list = data;
       } else if (data && Array.isArray(data.data)) {
         list = data.data;
+      } else if (data && data.data && Array.isArray(data.data.circles)) {
+        list = data.data.circles;
       } else if (data && Array.isArray(data.circles)) {
         list = data.circles;
+      } else if (data && data.data && Array.isArray(data.data.data)) {
+        list = data.data.data;
       }
 
       setCircles(list);
@@ -4930,9 +4949,10 @@ const MapScreen: React.FC = () => {
 
 
 
-  const handleChangeMapStyle = (type: MapType) => {
+  const handleChangeMapStyle = (type: MapStyle) => {
     setMapLayerStyle(type);
     setIsMapStyleModalOpen(false);
+    AsyncStorage.setItem(STORAGE_KEYS.mapStyle, type).catch(() => undefined);
   };
 
   const handleOpenChat = async () => {
@@ -5540,10 +5560,10 @@ const MapScreen: React.FC = () => {
     }
   }, [selectedCircle?.id, fetchCircleHistory]);
 
-  const mapStylesList: { key: MapType; label: string; icon: string; previewColor: string }[] = [
-    { key: 'standard', label: 'Auto', icon: 'map', previewColor: '#84CC16' },
-    { key: 'hybrid', label: 'Street', icon: 'map-outline', previewColor: '#60A5FA' },
+  const mapStylesList: { key: MapStyle; label: string; icon: string; previewColor: string }[] = [
+    { key: 'standard', label: 'Standard', icon: 'map', previewColor: '#84CC16' },
     { key: 'satellite', label: 'Satellite', icon: 'image', previewColor: '#FBBF24' },
+    { key: 'hybrid', label: 'Hybrid', icon: 'map-outline', previewColor: '#60A5FA' },
     { key: 'terrain', label: 'Terrain', icon: 'earth', previewColor: '#34D399' }
   ];
 
@@ -5859,31 +5879,13 @@ const MapScreen: React.FC = () => {
         <MapView
           ref={mapRef}
           style={[styles.map, { paddingBottom: MIN_HEIGHT }]}
-          provider={PROVIDER_GOOGLE}
           initialRegion={mapRegion}
           mapType={mapLayerStyle}
-          customMapStyle={mapLayerStyle === 'standard' ? MAP_THEME_LIGHT : undefined}
           showsUserLocation={false}
           showsCompass={false}
           showsMyLocationButton={false}
           onRegionChangeComplete={(region) => {
-            if (region.latitudeDelta < 0.02) {
-              if (mapLayerStyle !== 'satellite') {
-                setMapLayerStyle('satellite');
-              }
-            } else {
-              // Only switch back to standard if we are currently in satellite auto-switch mode
-              // But since we don't track "auto-switch mode", we'll just switch back to standard
-              // if the current style is satellite. 
-              // This effectively makes 'satellite' only available at high zoom levels unless we add more complex state.
-              // For now, I'll follow the request literally: change to satellite when zoom 50% (zoomed in).
-              // Implicitly, switch back when zoomed out? 
-              // If I don't switch back, it stays satellite forever after one zoom in. 
-              // Usually these features toggle back.
-              if (mapLayerStyle === 'satellite') {
-                setMapLayerStyle('standard');
-              }
-            }
+            // No-op for now as we use standard OSM tiles
           }}
         >
           {location && userAccuracyRadius ? (

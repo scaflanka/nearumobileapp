@@ -1,5 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import polyline from "@mapbox/polyline";
+// import polyline from "@mapbox/polyline"; // Manual decoder used instead
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
@@ -12,7 +12,7 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
 import { CircleMember, Journey, JourneyHistoryPoint } from "../../types/models";
@@ -105,7 +105,8 @@ const calculateJourneyStats = (history: JourneyHistoryPoint[]) => {
 };
 
 // --- Route Helpers ---
-const GOOGLE_MAPS_API_KEY = "AIzaSyBoqhQWOBssPSZpeWLuVEiaqF0Qzu2oQqk";
+// OSRM Base URL for routing and distance calculations
+const OSRM_BASE_URL = "https://router.project-osrm.org";
 
 const fetchJourneyStatsFromMatrix = async (history: JourneyHistoryPoint[]) => {
     if (history.length < 2) return null;
@@ -113,129 +114,67 @@ const fetchJourneyStatsFromMatrix = async (history: JourneyHistoryPoint[]) => {
     const origin = history[0];
     const destination = history[history.length - 1];
 
-    const requestBody = {
-        origins: [{
-            waypoint: {
-                location: {
-                    latLng: {
-                        latitude: Number(origin.latitude),
-                        longitude: Number(origin.longitude)
-                    }
-                }
-            }
-        }],
-        destinations: [{
-            waypoint: {
-                location: {
-                    latLng: {
-                        latitude: Number(destination.latitude),
-                        longitude: Number(destination.longitude)
-                    }
-                }
-            }
-        }],
-        travelMode: "DRIVE",
-        routingPreference: "TRAFFIC_UNAWARE"
-    };
-
     try {
-        const response = await fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-                "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,condition"
-            },
-            body: JSON.stringify(requestBody),
-        });
+        const coords = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
+        const url = `${OSRM_BASE_URL}/route/v1/driving/${coords}?overview=false`;
 
+        const response = await fetch(url);
         const data = await response.json();
 
-        if (response.ok && data[0]) {
-            const result = data[0];
-            const distanceMiles = (result.distanceMeters / 1609.34).toFixed(1);
+        if (response.ok && data.routes?.[0]) {
+            const result = data.routes[0];
+            const distanceMiles = (result.distance / 1609.34).toFixed(1);
 
-            const seconds = parseInt((result.duration || "0s").replace('s', ''));
+            const seconds = result.duration;
             const mins = Math.round(seconds / 60);
 
             return {
                 distanceMiles,
                 duration: mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} hr ${mins % 60} min`,
-                rawMeters: result.distanceMeters,
+                rawMeters: result.distance,
                 rawSeconds: seconds
             };
         }
     } catch (e) {
-        console.warn("Matrix API error:", e);
+        console.warn("OSRM Route API error:", e);
     }
 
     return null;
 };
 
+// Helper: Standard polyline decoder as per Guide
 const decodePolyline = (encoded: string) => {
-    return polyline.decode(encoded).map(([lat, lng]: [number, number]) => ({
-        latitude: lat,
-        longitude: lng,
-    }));
+    const poly = [];
+    let index = 0, len = encoded.length;
+    let lat = 0, lng = 0;
+    while (index < len) {
+        let b, shift = 0, result = 0;
+        do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lat += (result & 1 ? ~(result >> 1) : result >> 1);
+        shift = 0; result = 0;
+        do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lng += (result & 1 ? ~(result >> 1) : result >> 1);
+        poly.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+    }
+    return poly;
 };
 
 const fetchRoute = async (historyCoords: { latitude: number; longitude: number }[]): Promise<{ latitude: number, longitude: number }[]> => {
     if (historyCoords.length < 2) return historyCoords;
 
     try {
-        const origin = historyCoords[0];
-        const destination = historyCoords[historyCoords.length - 1];
+        // Construct coordinate string for OSRM: lon,lat;lon,lat;...
+        const coordsStr = historyCoords.map(p => `${p.longitude},${p.latitude}`).join(';');
+        const url = `${OSRM_BASE_URL}/route/v1/driving/${coordsStr}?overview=full&geometries=polyline`;
 
-        // Sample points to stay within Google's 25-intermediate limit
-        let intermediates: any[] = [];
-        if (historyCoords.length > 2) {
-            const middlePoints = historyCoords.slice(1, -1);
-            const maxIntermediates = 23;
-
-            const sampled = [];
-            const step = Math.max(1, Math.floor(middlePoints.length / maxIntermediates));
-
-            for (let i = 0; i < middlePoints.length && sampled.length < maxIntermediates; i += step) {
-                sampled.push(middlePoints[i]);
-            }
-
-            intermediates = sampled.map(p => ({
-                location: {
-                    latLng: {
-                        latitude: Number(p.latitude),
-                        longitude: Number(p.longitude)
-                    }
-                },
-                via: true
-            }));
-        }
-
-        const requestBody = {
-            origin: { location: { latLng: { latitude: Number(origin.latitude), longitude: Number(origin.longitude) } } },
-            destination: { location: { latLng: { latitude: Number(destination.latitude), longitude: Number(destination.longitude) } } },
-            intermediates: intermediates,
-            travelMode: "DRIVE",
-            routingPreference: "TRAFFIC_UNAWARE",
-            computeAlternativeRoutes: false,
-        };
-
-        const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-                "X-Goog-FieldMask": "routes.polyline.encodedPolyline"
-            },
-            body: JSON.stringify(requestBody),
-        });
-
+        const response = await fetch(url);
         const data = await response.json();
 
-        if (response.ok && data.routes?.[0]?.polyline?.encodedPolyline) {
-            return decodePolyline(data.routes[0].polyline.encodedPolyline);
+        if (response.ok && data.routes?.[0]?.geometry) {
+            return decodePolyline(data.routes[0].geometry);
         }
     } catch (e) {
-        console.warn("Route fetch error:", e);
+        console.warn("OSRM Route fetch error:", e);
     }
 
     return historyCoords; // Fallback to straight lines if API fails
@@ -316,12 +255,6 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
         <View style={{ flex: 1, width: '100%', height: SCREEN_HEIGHT * 0.25 }}>
             <MapView
                 ref={mapRef}
-                provider={PROVIDER_GOOGLE}
-                style={styles.mapPreview}
-                scrollEnabled={true}
-                zoomEnabled={true}
-                pitchEnabled={false}
-                rotateEnabled={false}
                 onMapReady={handleMapReady}
                 initialRegion={historyCoords[0] ? {
                     latitude: historyCoords[0].latitude,
@@ -471,71 +404,11 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
             topSpeed
         });
 
-        if (validTrips.length === 0) return;
-
-        try {
-            const batchSize = Math.min(validTrips.length, 25);
-            const batch = validTrips.slice(0, batchSize);
-
-            const requestBody = {
-                origins: batch.map(j => ({
-                    waypoint: {
-                        location: {
-                            latLng: {
-                                latitude: Number(j.history![0].latitude),
-                                longitude: Number(j.history![0].longitude)
-                            }
-                        }
-                    }
-                })),
-                destinations: batch.map(j => ({
-                    waypoint: {
-                        location: {
-                            latLng: {
-                                latitude: Number(j.history![j.history!.length - 1].latitude),
-                                longitude: Number(j.history![j.history!.length - 1].longitude)
-                            }
-                        }
-                    }
-                })),
-                travelMode: "DRIVE",
-                routingPreference: "TRAFFIC_UNAWARE"
-            };
-
-            const response = await fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-                    "X-Goog-FieldMask": "originIndex,destinationIndex,distanceMeters"
-                },
-                body: JSON.stringify(requestBody),
-            });
-
-            const data = await response.json();
-            if (response.ok && Array.isArray(data)) {
-                let accurateMeters = 0;
-                data.forEach((element: any) => {
-                    if (element.originIndex === element.destinationIndex) {
-                        accurateMeters += (element.distanceMeters || 0);
-                    }
-                });
-
-                if (validTrips.length > batchSize) {
-                    validTrips.slice(batchSize).forEach(j => {
-                        const ls = calculateJourneyStats(j.history || []);
-                        accurateMeters += (parseFloat(ls.distanceMiles) * 1609.34);
-                    });
-                }
-
-                setBatchStats(prev => ({
-                    ...prev!,
-                    totalMiles: (accurateMeters / 1609.34).toFixed(1)
-                }));
-            }
-        } catch (e) {
-            console.warn("Batch Matrix API error:", e);
-        }
+        setBatchStats({
+            totalMiles: (totalMilesMeters / 1609.34).toFixed(1),
+            totalDrives: driveCount,
+            topSpeed
+        });
     };
 
     const fetchHistory = useCallback(async () => {
