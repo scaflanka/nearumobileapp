@@ -13,13 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
 import { useAlert } from "../../context/AlertContext";
 
-interface Notification {
-    id: string;
-    title: string;
-    message: string;
-    createdAt: string;
-    read: boolean;
-}
+import { AppNotification, NotificationPagination } from "../../types/models";
 
 interface NotificationsModalProps {
     isOpen: boolean;
@@ -31,36 +25,77 @@ const NotificationsModal: React.FC<NotificationsModalProps> = ({
     onClose
 }) => {
     const { showAlert } = useAlert();
-    const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [notifications, setNotifications] = useState<AppNotification[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [page, setPage] = useState(1);
+    const [pagination, setPagination] = useState<NotificationPagination | null>(null);
+    const [loadingMore, setLoadingMore] = useState(false);
 
     useEffect(() => {
         if (isOpen) {
-            fetchNotifications();
+            setPage(1);
+            fetchNotifications(1, false);
         }
     }, [isOpen]);
 
-    const fetchNotifications = async () => {
+    const fetchNotifications = async (pageToFetch: number, append: boolean) => {
         try {
-            setLoading(true);
-            const response = await authenticatedFetch(`${API_BASE_URL}/notifications`);
+            if (!append) setLoading(true);
+            else setLoadingMore(true);
+
+            const response = await authenticatedFetch(
+                `${API_BASE_URL}/notifications?page=${pageToFetch}&perPage=20`
+            );
+
             if (response.ok) {
-                const data = await response.json();
-                setNotifications(Array.isArray(data) ? data : data.data || []);
+                const result = await response.json();
+                const fetchedNotifications = result.data?.notifications || [];
+                const fetchedPagination = result.data?.pagination || null;
+
+                if (append) {
+                    setNotifications(prev => [...prev, ...fetchedNotifications]);
+                } else {
+                    setNotifications(fetchedNotifications);
+                }
+                setPagination(fetchedPagination);
             }
         } catch (error) {
             console.error("Failed to fetch notifications", error);
         } finally {
             setLoading(false);
+            setLoadingMore(false);
+            setRefreshing(false);
+        }
+    };
+
+    const handleRefresh = () => {
+        setRefreshing(true);
+        setPage(1);
+        fetchNotifications(1, false);
+    };
+
+    const handleLoadMore = () => {
+        if (!loadingMore && pagination && page < pagination.totalPages) {
+            const nextPage = page + 1;
+            setPage(nextPage);
+            fetchNotifications(nextPage, true);
         }
     };
 
     const handleMarkAsRead = async (id: string) => {
         try {
-            await authenticatedFetch(`${API_BASE_URL}/notifications/${id}/read`, {
-                method: 'PUT'
+            const response = await authenticatedFetch(`${API_BASE_URL}/notifications/${id}`, {
+                method: 'PUT',
+                headers: {
+                    "Content-Type": "application/json",
+                    accept: "application/json",
+                }
             });
-            setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+
+            if (response.ok) {
+                setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+            }
         } catch (error) {
             console.error("Failed to mark notification as read", error);
         }
@@ -91,26 +126,60 @@ const NotificationsModal: React.FC<NotificationsModalProps> = ({
                     <FlatList
                         data={notifications}
                         keyExtractor={(item) => item.id}
-                        renderItem={({ item }) => (
-                            <TouchableOpacity
-                                style={[styles.notificationItem, !item.read && styles.unreadItem]}
-                                onPress={() => handleMarkAsRead(item.id)}
-                            >
-                                <View style={styles.notificationContent}>
-                                    <Text style={styles.notificationTitle}>{item.title}</Text>
-                                    <Text style={styles.notificationMessage}>{item.message}</Text>
-                                    <Text style={styles.notificationTime}>
-                                        {new Date(item.createdAt).toLocaleString()}
-                                    </Text>
-                                </View>
-                                {!item.read && <View style={styles.unreadDot} />}
-                            </TouchableOpacity>
+                        refreshing={refreshing}
+                        onRefresh={handleRefresh}
+                        onEndReached={handleLoadMore}
+                        onEndReachedThreshold={0.5}
+                        renderItem={({ item }) => {
+                            const date = new Date(item.createdAt);
+                            const timeStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                            return (
+                                <TouchableOpacity
+                                    style={[styles.notificationItem, !item.read && styles.unreadItem]}
+                                    onPress={() => !item.read && handleMarkAsRead(item.id)}
+                                    activeOpacity={0.7}
+                                >
+                                    <View style={styles.iconContainer}>
+                                        <View style={[styles.typeIconCircle, { backgroundColor: item.read ? '#F3F4F6' : '#DBEAFE' }]}>
+                                            <Ionicons
+                                                name={getNotificationIcon(item.type)}
+                                                size={20}
+                                                color={item.read ? '#9CA3AF' : '#113C9C'}
+                                            />
+                                        </View>
+                                    </View>
+                                    <View style={styles.notificationContent}>
+                                        <View style={styles.itemHeader}>
+                                            <Text style={styles.notificationType}>
+                                                {formatType(item.type)}
+                                            </Text>
+                                            <Text style={styles.notificationTime}>{timeStr}</Text>
+                                        </View>
+                                        <Text style={[styles.notificationMessage, !item.read && styles.unreadMessageText]}>
+                                            {item.message}
+                                        </Text>
+                                        {item.circle && (
+                                            <View style={styles.circleTag}>
+                                                <Ionicons name="people-outline" size={12} color="#6B7280" />
+                                                <Text style={styles.circleTagName}>{item.circle.name}</Text>
+                                            </View>
+                                        )}
+                                    </View>
+                                    {!item.read && <View style={styles.unreadDot} />}
+                                </TouchableOpacity>
+                            );
+                        }}
+                        ListFooterComponent={() => (
+                            loadingMore ? <ActivityIndicator style={{ marginVertical: 20 }} color="#113C9C" /> : null
                         )}
                         ListEmptyComponent={
-                            <View style={styles.emptyContainer}>
-                                <Ionicons name="notifications-off-outline" size={64} color="#9CA3AF" />
-                                <Text style={styles.emptyText}>No notifications</Text>
-                            </View>
+                            !loading ? (
+                                <View style={styles.emptyContainer}>
+                                    <Ionicons name="notifications-off-outline" size={64} color="#9CA3AF" />
+                                    <Text style={styles.emptyText}>No notifications</Text>
+                                </View>
+                            ) : null
                         }
                         contentContainerStyle={styles.listContent}
                     />
@@ -120,48 +189,107 @@ const NotificationsModal: React.FC<NotificationsModalProps> = ({
     );
 };
 
+const getNotificationIcon = (type: string) => {
+    switch (type) {
+        case 'location_reached': return 'location-outline';
+        case 'location_left': return 'exit-outline';
+        case 'low_battery': return 'battery-dead-outline';
+        case 'sos_alert': return 'warning-outline';
+        case 'drive_detected': return 'car-outline';
+        default: return 'notifications-outline';
+    }
+};
+
+const formatType = (type: string) => {
+    return type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+};
+
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#fff" },
+    container: { flex: 1, backgroundColor: "#F9FAFB" },
     header: {
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingVertical: 16,
+        backgroundColor: '#fff',
         borderBottomWidth: 1,
-        borderBottomColor: "#f3f4f6",
+        borderBottomColor: "#E5E7EB",
     },
     backButton: { flexDirection: "row", alignItems: "center" },
-    headerTitle: { fontSize: 18, fontWeight: "600", color: "#113C9C", marginLeft: 4 },
+    headerTitle: { fontSize: 20, fontWeight: "700", color: "#113C9C", marginLeft: 8 },
     loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    listContent: { padding: 16 },
+    listContent: { padding: 16, paddingBottom: 40 },
     notificationItem: {
         backgroundColor: '#fff',
-        borderRadius: 12,
+        borderRadius: 16,
         padding: 16,
         marginBottom: 12,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
         flexDirection: 'row',
         alignItems: 'flex-start',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+        elevation: 2,
     },
     unreadItem: {
-        backgroundColor: '#EFF6FF',
-        borderColor: '#113C9C',
+        backgroundColor: '#fff',
+        borderLeftWidth: 4,
+        borderLeftColor: '#113C9C',
+    },
+    iconContainer: {
+        marginRight: 12,
+    },
+    typeIconCircle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     notificationContent: { flex: 1 },
-    notificationTitle: { fontSize: 16, fontWeight: '600', color: '#111827', marginBottom: 4 },
-    notificationMessage: { fontSize: 14, color: '#4B5563', marginBottom: 8 },
-    notificationTime: { fontSize: 12, color: '#9CA3AF' },
+    itemHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 4,
+    },
+    notificationType: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#6B7280',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    notificationTime: { fontSize: 11, color: '#9CA3AF' },
+    notificationMessage: { fontSize: 15, color: '#374151', lineHeight: 20 },
+    unreadMessageText: { fontWeight: '600', color: '#111827' },
+    circleTag: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 8,
+        backgroundColor: '#F3F4F6',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 12,
+        alignSelf: 'flex-start',
+    },
+    circleTagName: {
+        fontSize: 11,
+        color: '#6B7280',
+        marginLeft: 4,
+        fontWeight: '500',
+    },
     unreadDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
         backgroundColor: '#113C9C',
         marginLeft: 8,
-        marginTop: 6,
+        marginTop: 15,
     },
-    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
-    emptyText: { fontSize: 16, color: '#9CA3AF', marginTop: 16 },
+    emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 120 },
+    emptyText: { fontSize: 16, color: '#9CA3AF', marginTop: 16, fontWeight: '500' },
 });
 
 export default NotificationsModal;

@@ -640,7 +640,7 @@ const getPlaceTypeIcon = (type?: string | null) => {
     case 'hotel': return 'bed';
     case 'ground': return 'map';
     case 'business': return 'business';
-    case 'center': return 'location';
+    case 'center': return 'location-sharp';
     default: return 'location-sharp';
   }
 };
@@ -5689,7 +5689,7 @@ const MapScreen: React.FC = () => {
         coordinate={coordinate}
         displayName={displayName}
         avatarUrl={resolvedAvatar}
-        batteryLevel={batteryValue}
+        speed={coordinate.speed}
         isCurrentUser={isCurrentUser}
         relation={(memberRecord as any)?.Membership?.metadata?.relation}
         onPress={() => !isCurrentUser && memberRecord && handleOpenMemberJourneysModal(memberRecord)}

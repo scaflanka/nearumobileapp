@@ -117,3 +117,34 @@ export interface LocationHistoryEntry {
 export type LocationHistoryFilterKey = "today" | "yesterday" | "this_week" | "this_month" | "custom";
 
 export type MapType = "standard" | "satellite" | "hybrid" | "terrain";
+
+export interface AppNotification {
+  id: string;
+  type: string;
+  message: string;
+  read: boolean;
+  metadata?: Record<string, any>;
+  createdAt: string;
+  actor?: {
+    id: string;
+    name: string;
+    avatar?: string | null;
+  };
+  circle?: {
+    id: string;
+    name: string;
+  };
+  location?: {
+    id: string;
+    name: string;
+    latitude: number;
+    longitude: number;
+  };
+}
+
+export interface NotificationPagination {
+  page: number;
+  perPage: number;
+  total: number;
+  totalPages: number;
+}

@@ -804,7 +804,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                                     onPress={() => handleSelectSearchResult(item)}
                                                     disabled={isSavingLocation}
                                                 >
-                                                    <Ionicons name="location" size={20} color={isSelected ? COLORS.primary : COLORS.gray} style={styles.searchResultIcon} />
+                                                    <Ionicons name="location-sharp" size={20} color={isSelected ? COLORS.primary : COLORS.gray} style={styles.searchResultIcon} />
                                                     <View style={styles.searchResultTextWrapper}>
                                                         <Text style={styles.searchResultTitle}>{item.address}</Text>
                                                     </View>
@@ -886,6 +886,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                                 description={markerDescription}
                                                 radius={(loc.metadata as any)?.radius || DEFAULT_RADIUS_METERS}
                                                 placeType={(loc.metadata as any)?.placeType}
+                                                locationType={(loc.metadata as any)?.locationType}
                                                 isAssignedToCurrentUser={false}
                                             />
                                         );
@@ -923,7 +924,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                                 coordinate={coords}
                                                 displayName={displayName}
                                                 avatarUrl={resolvedAvatar}
-                                                batteryLevel={batteryValue}
+                                                speed={coords.speed}
                                                 isCurrentUser={isCurrentUser}
                                                 relation={memberRecord?.Membership?.metadata?.relation}
                                             />
@@ -934,7 +935,7 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
                                     <View style={styles.dynamicMarkerWrapper}>
                                         <View style={[styles.dynamicMarkerCircle, { borderColor: COLORS.accent }]}>
                                             <Ionicons
-                                                name={getPlaceTypeIcon(selectedPlaceType) as any}
+                                                name="location-sharp"
                                                 size={20}
                                                 color={COLORS.accent}
                                             />

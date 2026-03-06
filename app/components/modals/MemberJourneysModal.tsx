@@ -174,7 +174,7 @@ const fetchRoute = async (historyCoords: { latitude: number; longitude: number }
             return decodePolyline(data.routes[0].geometry);
         }
     } catch (e) {
-        console.warn("OSRM Route fetch error:", e);
+        console.error("OSRM Route fetch error:", e);
     }
 
     return historyCoords; // Fallback to straight lines if API fails
@@ -194,8 +194,12 @@ const isStationaryJourney = (history: JourneyHistoryPoint[]) => {
     const stats = calculateJourneyStats(history);
     const totalDistanceMeters = parseFloat(stats.distanceMiles) * 1609.34;
 
-    if (displacementMeters < 150 && stats.topSpeedMph < 10) return true;
-    if (totalDistanceMeters < 200) return true;
+    if (displacementMeters < 100 && stats.topSpeedMph < 5) {
+        return true;
+    }
+    if (totalDistanceMeters < 150) {
+        return true;
+    }
 
     return false;
 };
@@ -241,7 +245,7 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
     }, [historyCoords]);
 
     const handleMapReady = () => {
-        if (historyCoords.length > 0) {
+        if (historyCoords.length > 1) {
             setTimeout(() => {
                 mapRef.current?.fitToCoordinates(historyCoords, {
                     edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
@@ -255,12 +259,13 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
         <View style={{ flex: 1, width: '100%', height: SCREEN_HEIGHT * 0.25 }}>
             <MapView
                 ref={mapRef}
+                style={styles.mapPreview}
                 onMapReady={handleMapReady}
                 initialRegion={historyCoords[0] ? {
                     latitude: historyCoords[0].latitude,
                     longitude: historyCoords[0].longitude,
-                    latitudeDelta: 0.05,
-                    longitudeDelta: 0.05,
+                    latitudeDelta: historyCoords.length < 2 ? 0.005 : 0.05,
+                    longitudeDelta: historyCoords.length < 2 ? 0.005 : 0.05,
                 } : undefined}
             >
                 {/* Road-snapped connecting line */}
@@ -327,35 +332,15 @@ const JourneyListItem = ({ item }: { item: Journey }) => {
         return () => { isMounted = false; };
     }, [item.startTime, isStay]);
 
-    if (isStay) {
-        const stayLocation = item.history?.[0]?.name || "Unknown Location";
-        return (
-            <View style={styles.journeyItem}>
-                <View style={styles.journeyHeader}>
-                    <View style={[styles.journeyIconBox, { backgroundColor: COLORS.secondary }]}>
-                        <Ionicons name="location" size={20} color={COLORS.white} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.stayTitle}>{stayLocation}</Text>
-                        <Text style={styles.journeyTime}>{timeRange} ({duration})</Text>
-                    </View>
-                </View>
-                <TouchableOpacity style={styles.addToPlacesBtn}>
-                    <Text style={styles.addToPlacesText}>Add to Places</Text>
-                </TouchableOpacity>
-            </View>
-        );
-    }
-
     return (
         <View style={styles.journeyItem}>
             <View style={styles.journeyHeader}>
-                <View style={styles.journeyIconBox}>
-                    <Ionicons name="shuffle" size={20} color={COLORS.white} />
+                <View style={[styles.journeyIconBox, isStay && { backgroundColor: COLORS.secondary }]}>
+                    <Ionicons name={isStay ? "location-sharp" : "shuffle"} size={20} color={COLORS.white} />
                 </View>
-                <View>
-                    <Text style={styles.journeyTitle}>
-                        {stats.distanceMiles} mi Trip {isLoadingStats && "..."}
+                <View style={{ flex: 1 }}>
+                    <Text style={isStay ? styles.stayTitle : styles.journeyTitle}>
+                        {isStay ? (item.history?.[0]?.name || "Stayed at Location") : `${stats.distanceMiles} mi Trip ${isLoadingStats && "..."}`}
                     </Text>
                     <Text style={styles.journeyTime}>{timeRange} ({duration})</Text>
                 </View>
@@ -363,12 +348,20 @@ const JourneyListItem = ({ item }: { item: Journey }) => {
 
             <View style={styles.mapPreviewContainer}>
                 <JourneyMapItem history={item.history || []} />
-                <View style={styles.topSpeedPill}>
-                    <MaterialCommunityIcons name="speedometer" size={14} color={COLORS.secondary} />
-                    <Text style={styles.topSpeedPillLabel}>Top Speed</Text>
-                    <Text style={styles.topSpeedPillValue}>{stats.topSpeedMph} mph</Text>
-                </View>
+                {/* {!isStay && (
+                    <View style={styles.topSpeedPill}>
+                        <MaterialCommunityIcons name="speedometer" size={14} color={COLORS.secondary} />
+                        <Text style={styles.topSpeedPillLabel}>Top Speed</Text>
+                        <Text style={styles.topSpeedPillValue}>{stats.topSpeedMph} mph</Text>
+                    </View>
+                )} */}
             </View>
+
+            {isStay && (
+                <TouchableOpacity style={styles.addToPlacesBtn}>
+                    <Text style={styles.addToPlacesText}>Add to Places</Text>
+                </TouchableOpacity>
+            )}
         </View>
     );
 };
@@ -554,7 +547,7 @@ const MemberJourneysModal: React.FC<MemberJourneysModalProps> = ({
                         ListHeaderComponent={
                             <>
                                 {renderProfileBar()}
-                                {renderStatsSummary()}
+                                {/* {renderStatsSummary()} */}
                             </>
                         }
                         renderItem={({ item }) => <JourneyListItem item={item} />}
@@ -727,11 +720,11 @@ const styles = StyleSheet.create({
 
     // Numbered Journey Points
     numberedMarker: {
-        width: 20,
-        height: 20,
-        borderRadius: 10,
+        width: 16,
+        height: 16,
+        borderRadius: 8,
         backgroundColor: COLORS.roadBlue,
-        borderWidth: 2,
+        borderWidth: 1.5,
         borderColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
@@ -743,7 +736,7 @@ const styles = StyleSheet.create({
     },
     numberedMarkerText: {
         color: COLORS.white,
-        fontSize: 10,
+        fontSize: 8,
         fontWeight: '900',
     },
     mapControls: {

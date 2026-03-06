@@ -1,7 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import React from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
-import { Marker } from "react-native-maps";
+import { Circle, Marker } from "react-native-maps";
 
 const COLORS = {
     primary: "#113C9C",
@@ -18,7 +18,7 @@ interface MemberMarkerProps {
     coordinate: { latitude: number; longitude: number; battery?: string | null };
     displayName: string;
     avatarUrl: string;
-    batteryLevel: number | null;
+    speed?: number | null;
     isCurrentUser: boolean;
     relation?: string | null;
     onPress?: () => void;
@@ -29,7 +29,7 @@ export const MemberMarker: React.FC<MemberMarkerProps> = React.memo(({
     coordinate,
     displayName,
     avatarUrl,
-    batteryLevel,
+    speed,
     isCurrentUser,
     relation,
     onPress,
@@ -42,19 +42,12 @@ export const MemberMarker: React.FC<MemberMarkerProps> = React.memo(({
         return () => clearTimeout(timer);
     }, [avatarUrl, displayName]); // Re-track if major visuals change
 
-    const getBatteryIconName = (val: number | null) => {
-        if (val === null) return "battery-unknown";
-        if (val >= 95) return "battery";
-        const levels = [90, 80, 70, 60, 50, 40, 30, 20, 10];
-        for (const l of levels) { if (val >= l - 5) return `battery-${l}`; }
-        return "battery-10";
-    };
-
-    const batteryValue = batteryLevel ?? 100;
-    const displayBattery = `${batteryValue}%`;
-    const batteryColor = batteryValue < 20 ? '#EF4444' : (batteryValue < 50 ? '#F59E0B' : '#10B981');
     const accentColor = isCurrentUser ? "#2563EB" : "#22C55E";
     const markerTitle = relation && relation !== 'Other' ? `${displayName} (${relation})` : displayName;
+
+    // Show speed badge if speed is a number (even 0)
+    const showSpeedBadge = typeof speed === 'number';
+    const speedDisplay = showSpeedBadge ? `${Math.round(speed)}` : null;
 
     return (
         <Marker
@@ -70,25 +63,20 @@ export const MemberMarker: React.FC<MemberMarkerProps> = React.memo(({
                     <Image source={{ uri: avatarUrl }} style={styles.avatarImage} resizeMode="cover" />
                 </View>
                 <View style={[styles.pointerTriangle, { borderTopColor: accentColor }]} />
-                <View style={styles.batteryBadgeContainer}>
-                    <View style={styles.batteryBadgeInner}>
-                        <MaterialCommunityIcons
-                            name={getBatteryIconName(batteryValue) as any}
-                            size={25}
-                            color={batteryColor}
-                            style={styles.batteryIcon}
-                        />
-                        <Text style={[
-                            styles.batteryText,
-                            {
-                                fontSize: displayBattery.length >= 4 ? 5.5 : (displayBattery.length >= 3 ? 7.5 : 9),
-                                paddingHorizontal: displayBattery.length >= 2 ? 1 : 2
-                            }
-                        ]}>
-                            {displayBattery}
-                        </Text>
+                {showSpeedBadge && (
+                    <View style={styles.speedBadgeContainer}>
+                        <View style={styles.speedBadgeInner}>
+                            <MaterialCommunityIcons
+                                name="speedometer"
+                                size={16}
+                                color={COLORS.white}
+                            />
+                            <Text style={styles.speedText}>
+                                {speedDisplay}
+                            </Text>
+                        </View>
                     </View>
-                </View>
+                )}
             </View>
         </Marker>
     );
@@ -127,13 +115,13 @@ export const LocationMarker: React.FC<LocationMarkerProps> = ({
 
     return (
         <>
-            {/* <Circle
+            <Circle
                 center={coordinate}
                 radius={radius}
                 strokeColor={circleStrokeColor}
                 fillColor={circleFillColor}
                 strokeWidth={2}
-            /> */}
+            />
 
             {/* Helper to pick icon based on placeType */}
             {(() => {
@@ -147,7 +135,7 @@ export const LocationMarker: React.FC<LocationMarkerProps> = ({
                         case 'hotel': return 'bed';
                         case 'ground': return 'map';
                         case 'business': return 'business';
-                        case 'center': return 'location';
+                        case 'center': return 'location-sharp';
                         default: return 'location-sharp';
                     }
                 };
@@ -185,10 +173,11 @@ const styles = StyleSheet.create({
     markerContainer: {
         alignItems: 'center',
         justifyContent: 'center',
+        padding: 12, // Added padding to prevent cropping of absolutely positioned badges
     },
     avatarCircle: {
-        width: 28,
-        height: 28,
+        width: 24,
+        height: 24,
         borderRadius: 4,
         borderWidth: 1,
         backgroundColor: 'white',
@@ -212,32 +201,35 @@ const styles = StyleSheet.create({
         borderRightColor: 'transparent',
         marginTop: -2,
     },
-    batteryBadgeContainer: {
+    speedBadgeContainer: {
         position: 'absolute',
-        top: -6,
-        right: -5,
-        backgroundColor: 'transparent',
+        top: -8,
+        right: -10,
+        backgroundColor: COLORS.primary,
+        borderRadius: 12,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
+        borderWidth: 1.5,
+        borderColor: 'white',
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 1,
+        elevation: 3,
         zIndex: 10,
     },
-    batteryBadgeInner: {
-        backgroundColor: 'transparent',
-        paddingHorizontal: 0,
+    speedBadgeInner: {
+        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
+        gap: 2,
     },
-    batteryIcon: {
-        margin: 0,
-        transform: [{ rotate: '90deg' }],
-    },
-    batteryText: {
-        position: 'absolute',
-        fontWeight: '900',
-        color: COLORS.black,
+    speedText: {
+        fontSize: 10,
+        fontWeight: '800',
+        color: 'white',
         textAlign: 'center',
-        backgroundColor: 'white',
-        borderRadius: 2,
     },
 });
