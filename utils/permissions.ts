@@ -1,13 +1,61 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import messaging from '@react-native-firebase/messaging';
 import Constants from 'expo-constants';
+import * as Location from 'expo-location';
 import { PermissionsAndroid, Platform } from 'react-native';
 import { authenticatedFetch } from './auth';
 
-// const API_BASE_URL = "https://api.medi.lk/api";
-// const API_BASE_URL = "https://nearu.servefamily.com/api";
+// ... (existing code)
+
+/**
+ * Ensures only one location permission request happens at a time to prevent native crashes.
+ */
+let isRequestingLocation = false;
+
+/**
+ * Requests location permissions safely.
+ * Handles foreground and background permissions with proper sequence for Android 11+.
+ */
+export const requestLocationPermissions = async (
+  requestBackground: boolean = false
+): Promise<{ foreground: Location.PermissionStatus; background?: Location.PermissionStatus }> => {
+  if (isRequestingLocation) {
+    // If already requesting, wait or return current state. 
+    // For simplicity, we just return if already busy to avoid overlapping native dialogs.
+    console.warn('Location permission request already in progress');
+    const fg = await Location.getForegroundPermissionsAsync();
+    const bg = await Location.getBackgroundPermissionsAsync();
+    return { foreground: fg.status, background: bg.status };
+  }
+
+  isRequestingLocation = true;
+  try {
+    // Phase 1: Foreground
+    const foregroundResponse = await Location.requestForegroundPermissionsAsync();
+
+    if (foregroundResponse.status !== 'granted' || !requestBackground || Platform.OS === 'web') {
+      return { foreground: foregroundResponse.status };
+    }
+
+    // Phase 2: Background (only if native and foreground granted)
+    // On Android 11+, foreground and background must be requested separately.
+    try {
+      const backgroundResponse = await Location.requestBackgroundPermissionsAsync();
+      return {
+        foreground: foregroundResponse.status,
+        background: backgroundResponse.status
+      };
+    } catch (bgError) {
+      console.warn('Failed to request background location permission', bgError);
+      return { foreground: foregroundResponse.status, background: Location.PermissionStatus.DENIED };
+    }
+  } finally {
+    isRequestingLocation = false;
+  }
+};
 
 export const API_BASE_URL = "https://nearu.kalametiyaseafoodrestaurant.com/api";
+
 const LAST_SAVED_FCM_TOKEN_KEY = "lastSavedFcmToken";
 const LAST_FCM_RATE_LIMIT_TS_KEY = "lastFcmRateLimitTs";
 const FCM_RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes

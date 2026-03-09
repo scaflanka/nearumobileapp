@@ -1,9 +1,9 @@
-import * as Location from "expo-location";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { API_BASE_URL, authenticatedFetch } from "@/utils/auth";
+import { requestLocationPermissions } from "@/utils/permissions";
 import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
+import * as Location from "expo-location";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -43,7 +43,7 @@ type LocationEditPayload = {
 };
 
 import { BatteryLevelInfo, CircleMember, LocationPoint, UserLocation } from "../../types/models";
-import { LocationMarker, MemberMarker } from "../MapMarkers";
+import { LocationMarker, MarkerView, MemberMarker } from "../MapMarkers";
 
 interface AddPlaceModalProps {
     visible: boolean;
@@ -323,8 +323,9 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
 
     const requestLocationPermission = useCallback(async () => {
         try {
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            const granted = status === Location.PermissionStatus.GRANTED;
+            const { foreground } = await requestLocationPermissions(false);
+            const granted = foreground === Location.PermissionStatus.GRANTED;
+
             setCanShowUserLocation(granted);
             return granted;
         } catch (error) {
@@ -743,304 +744,343 @@ const AddPlaceModal: React.FC<AddPlaceModalProps> = ({
             <View style={[styles.screen, { paddingTop: insets.top }]}>
                 <KeyboardAvoidingView
                     style={styles.flex}
-                    behavior={Platform.OS === "ios" ? "padding" : "height"}
+                    behavior={Platform.OS === "ios" ? "padding" : undefined}
                 >
+
                     <ScrollView
                         style={styles.flex}
                         contentContainerStyle={[
                             styles.content,
-                            { paddingBottom: (isKeyboardVisible ? 250 : 0) }
+                            { paddingBottom: (isKeyboardVisible ? 250 : insets.bottom + 24) }
                         ]}
                         keyboardShouldPersistTaps="handled"
                     >
-                        <View style={styles.headerRow}>
-                            <TouchableOpacity onPress={onClose} style={styles.backButton}>
-                                <Ionicons name="close" size={24} color={COLORS.black} />
-                            </TouchableOpacity>
-                            <Text style={styles.headerTitle}>{headerTitle}</Text>
-                            <View style={styles.headerSpacer} />
-                        </View>
-
-                        <Text style={styles.subtitle}>{headerSubtitle}</Text>
-
-                        <View style={styles.searchInputRow}>
-                            <Ionicons name="search" size={18} color={COLORS.gray} style={styles.searchIcon} />
-                            <TextInput
-                                value={locationSearchQuery}
-                                onChangeText={handleLocationQueryChange}
-                                placeholder="Search for a location"
-                                placeholderTextColor={COLORS.gray}
-                                style={styles.searchInput}
-                                returnKeyType="search"
-                                autoCorrect={false}
-                                autoCapitalize="none"
-                                editable={!isSavingLocation}
-                                onSubmitEditing={handleSearchLocation}
-                            />
-                        </View>
-
-                        {locationError ? <Text style={styles.errorText}>{locationError}</Text> : null}
-
-                        {searchTimeoutRef.current && !isSearchingLocations ? (
-                            <Text style={styles.searchHint}>Searching...</Text>
-                        ) : null}
-
-                        {isSearchingLocations ? (
-                            <View style={styles.resultsPlaceholder}>
-                                <ActivityIndicator color={COLORS.primary} />
-                            </View>
-                        ) : (
-                            <>
-                                {locationSearchResults.length > 0 ? (
-                                    <ScrollView style={styles.searchResultsContainer} keyboardShouldPersistTaps="handled">
-                                        {locationSearchResults.map((item, index) => {
-                                            const isSelected =
-                                                selectedLocation?.latitude === item.latitude &&
-                                                selectedLocation?.longitude === item.longitude;
-                                            return (
-                                                <TouchableOpacity
-                                                    key={`${item.latitude}-${item.longitude}-${index}`}
-                                                    style={[styles.searchResultItem, isSelected && styles.searchResultSelected, isSavingLocation && styles.searchResultDisabled]}
-                                                    onPress={() => handleSelectSearchResult(item)}
-                                                    disabled={isSavingLocation}
-                                                >
-                                                    <Ionicons name="location-sharp" size={20} color={isSelected ? COLORS.primary : COLORS.gray} style={styles.searchResultIcon} />
-                                                    <View style={styles.searchResultTextWrapper}>
-                                                        <Text style={styles.searchResultTitle}>{item.address}</Text>
-                                                    </View>
-                                                    {isSelected && <Ionicons name="checkmark-circle" size={22} color={COLORS.primary} />}
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </ScrollView>
-                                ) : null}
-                            </>
-                        )}
-
-                        <View style={styles.radiusSection}>
-                            <View style={styles.radiusHeader}>
-                                <Text style={styles.radiusLabel}>Location radius</Text>
-                                <Text style={styles.radiusValue}>{radiusMeters} m</Text>
-                            </View>
-                            <Slider
-                                style={styles.radiusSlider}
-                                minimumValue={MIN_RADIUS_METERS}
-                                maximumValue={MAX_RADIUS_METERS}
-                                step={5}
-                                value={radiusMeters}
-                                onValueChange={handleRadiusSliderChange}
-                                minimumTrackTintColor={COLORS.primary}
-                                maximumTrackTintColor="#D1D5DB"
-                                thumbTintColor={COLORS.primary}
-                                disabled={isSavingLocation}
-                            />
-                            <View style={styles.radiusHintRow}>
-                                <Text style={styles.radiusHint}>{MIN_RADIUS_METERS} m</Text>
-                                <Text style={styles.radiusHint}>{MAX_RADIUS_METERS} m</Text>
+                        <View collapsable={false} key="header-container">
+                            <View style={styles.headerRow}>
+                                <TouchableOpacity onPress={onClose} style={styles.backButton}>
+                                    <Ionicons name="close" size={24} color={COLORS.black} />
+                                </TouchableOpacity>
+                                <Text style={styles.headerTitle}>{headerTitle}</Text>
+                                <View style={styles.headerSpacer} />
                             </View>
                         </View>
 
-                        <View style={styles.mapSection}>
-                            <Text style={styles.mapLabel}>Set the location on the map</Text>
-                            <View style={styles.mapWrapper}>
-                                <MapView
-                                    ref={mapRef}
-                                    style={styles.map}
-                                    initialRegion={initialRegion}
-                                    mapType="standard"
-                                    onRegionChangeComplete={handleRegionChangeComplete}
-                                    showsUserLocation={false}
-                                    rotateEnabled={false}
-                                    pitchEnabled={false}
-                                >
-                                    {selectedLocation && (
-                                        <Circle
-                                            center={{ latitude: selectedLocation.latitude, longitude: selectedLocation.longitude }}
-                                            radius={clampRadiusValue(radiusMeters)}
-                                            strokeColor="rgba(239, 68, 68, 0.6)"
-                                            fillColor="rgba(239, 68, 68, 0.18)"
-                                            strokeWidth={2}
-                                        />
-                                    )}
+                        <View collapsable={false} key="subtitle-container">
+                            <Text style={styles.subtitle}>{headerSubtitle}</Text>
+                        </View>
 
-                                    {/* Render other saved places in the circle */}
-                                    {savedPlaces.map((loc, idx) => {
-                                        // Skip the one we are currently editing to avoid duplication
-                                        if (isEditMode && editingLocation?.id && String(loc.id) === String(editingLocation.id)) {
-                                            return null;
-                                        }
+                        <View collapsable={false} key="search-input-container">
+                            <View style={styles.searchInputRow}>
+                                <Ionicons name="search" size={18} color={COLORS.gray} style={styles.searchIcon} />
+                                <TextInput
+                                    value={locationSearchQuery}
+                                    onChangeText={handleLocationQueryChange}
+                                    placeholder="Search for a location"
+                                    placeholderTextColor={COLORS.gray}
+                                    style={styles.searchInput}
+                                    returnKeyType="search"
+                                    autoCorrect={false}
+                                    autoCapitalize="none"
+                                    editable={!isSavingLocation}
+                                    onSubmitEditing={handleSearchLocation}
+                                />
+                            </View>
+                        </View>
 
-                                        let markerTitle = loc.name || "Saved Place";
-                                        let markerDescription: string | undefined;
 
-                                        if (loc.metadata && typeof loc.metadata === 'object') {
-                                            const meta = loc.metadata as any;
-                                            markerDescription = meta.address || meta.formattedAddress;
-                                        }
+                        <View collapsable={false} key="location-error-container">
+                            {locationError ? <Text style={styles.errorText}>{locationError}</Text> : <View style={{ height: 0 }} />}
+                        </View>
 
-                                        return (
-                                            <LocationMarker
-                                                key={`other-loc-${loc.id || idx}`}
-                                                coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
-                                                title={markerTitle}
-                                                description={markerDescription}
-                                                radius={(loc.metadata as any)?.radius || DEFAULT_RADIUS_METERS}
-                                                placeType={(loc.metadata as any)?.placeType}
-                                                locationType={(loc.metadata as any)?.locationType}
-                                                isAssignedToCurrentUser={false}
-                                            />
-                                        );
-                                    })}
+                        <View collapsable={false} key="search-hint-container">
+                            {searchTimeoutRef.current && !isSearchingLocations ? (
+                                <Text style={styles.searchHint}>Searching...</Text>
+                            ) : <View style={{ height: 0 }} />}
+                        </View>
 
-                                    {/* Render circle members */}
-                                    {Object.entries(memberLocations).map(([mId, coords]) => {
-                                        const isCurrentUser = currentUserId === mId;
-                                        const memberRecord = members.find(m => {
-                                            const mid = m.id || (m as any).userId || (m as any).UserId;
-                                            return String(mid) === String(mId);
-                                        });
+                        <View
+                            collapsable={false}
+                            style={styles.resultsContainerWrapper}
+                            key={`results-wrapper-${isSearchingLocations}-${locationSearchResults.length > 0}`}
+                        >
+                            {isSearchingLocations ? (
+                                <View style={styles.resultsPlaceholder}>
+                                    <ActivityIndicator color={COLORS.primary} />
+                                </View>
+                            ) : (
+                                <View collapsable={false}>
+                                    {locationSearchResults.length > 0 ? (
+                                        <ScrollView style={styles.searchResultsContainer} keyboardShouldPersistTaps="handled">
+                                            {locationSearchResults.map((item, index) => {
+                                                const isSelected =
+                                                    selectedLocation?.latitude === item.latitude &&
+                                                    selectedLocation?.longitude === item.longitude;
+                                                return (
+                                                    <TouchableOpacity
+                                                        key={`search-res-${item.latitude}-${item.longitude}-${index}`}
+                                                        style={[styles.searchResultItem, isSelected && styles.searchResultSelected, isSavingLocation && styles.searchResultDisabled]}
+                                                        onPress={() => handleSelectSearchResult(item)}
+                                                        disabled={isSavingLocation}
+                                                    >
+                                                        <Ionicons name="location-sharp" size={20} color={isSelected ? COLORS.primary : COLORS.gray} style={styles.searchResultIcon} />
+                                                        <View style={styles.searchResultTextWrapper}>
+                                                            <Text style={styles.searchResultTitle}>{item.address}</Text>
+                                                        </View>
+                                                        {isSelected && <Ionicons name="checkmark-circle" size={22} color={COLORS.primary} />}
+                                                    </TouchableOpacity>
+                                                );
+                                            })}
+                                        </ScrollView>
+                                    ) : <View style={{ height: 0 }} />}
+                                </View>
+                            )}
+                        </View>
 
-                                        if (!coords || !coords.latitude || !coords.longitude) return null;
 
-                                        const displayName = isCurrentUser
-                                            ? "You"
-                                            : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Member";
 
-                                        const fallbackSeed = memberRecord?.email ?? memberRecord?.name ?? memberRecord?.Membership?.nickname ?? mId ?? "member";
-                                        const avatarCandidate = isCurrentUser ? currentUserAvatarUrl : mId ? memberAvatarUrls[mId] : null;
-                                        let resolvedAvatar = avatarCandidate || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackSeed)}&background=random`;
+                        <View collapsable={false} key="radius-section-container">
+                            <View style={styles.radiusSection}>
+                                <View style={styles.radiusHeader}>
+                                    <Text style={styles.radiusLabel}>Location radius</Text>
+                                    <Text style={styles.radiusValue}>{radiusMeters} m</Text>
+                                </View>
+                                <Slider
+                                    style={styles.radiusSlider}
+                                    minimumValue={MIN_RADIUS_METERS}
+                                    maximumValue={MAX_RADIUS_METERS}
+                                    step={5}
+                                    value={radiusMeters}
+                                    onValueChange={handleRadiusSliderChange}
+                                    minimumTrackTintColor={COLORS.primary}
+                                    maximumTrackTintColor="#D1D5DB"
+                                    thumbTintColor={COLORS.primary}
+                                    disabled={isSavingLocation}
+                                />
+                                <View style={styles.radiusHintRow}>
+                                    <Text style={styles.radiusHint}>{MIN_RADIUS_METERS} m</Text>
+                                    <Text style={styles.radiusHint}>{MAX_RADIUS_METERS} m</Text>
+                                </View>
+                            </View>
+                        </View>
 
-                                        if (resolvedAvatar && resolvedAvatar.startsWith("/") && !resolvedAvatar.startsWith("http")) {
-                                            resolvedAvatar = `${API_BASE_URL}${resolvedAvatar}`.replace("/api/uploads", "/uploads");
-                                        }
 
-                                        const batteryInfo = isCurrentUser ? currentUserBatteryLevel : memberRecord?.batteryLevel;
-                                        const batteryValue = batteryInfo?.batteryLevel != null ? Math.round(batteryInfo.batteryLevel) : 100;
+                        <View collapsable={false} key="map-section-container">
+                            <View style={styles.mapSection}>
+                                <Text style={styles.mapLabel}>Set the location on the map</Text>
+                                <View style={styles.mapWrapper}>
+                                    <MapView
+                                        ref={mapRef}
+                                        style={styles.map}
+                                        initialRegion={initialRegion}
+                                        mapType="standard"
+                                        onRegionChangeComplete={handleRegionChangeComplete}
+                                        showsUserLocation={false}
+                                        rotateEnabled={false}
+                                        pitchEnabled={false}
+                                    >
+                                        {(() => {
+                                            const mapChildren = [];
 
-                                        return (
-                                            <MemberMarker
-                                                key={`member-${mId}`}
-                                                memberId={mId}
-                                                coordinate={coords}
-                                                displayName={displayName}
-                                                avatarUrl={resolvedAvatar}
-                                                speed={coords.speed}
-                                                isCurrentUser={isCurrentUser}
-                                                relation={memberRecord?.Membership?.metadata?.relation}
-                                            />
-                                        );
-                                    })}
-                                </MapView>
-                                <View style={styles.centerMarkerContainer} pointerEvents="none">
-                                    <View style={styles.dynamicMarkerWrapper}>
-                                        <View style={[styles.dynamicMarkerCircle, { borderColor: COLORS.accent }]}>
+                                            if (selectedLocation) {
+                                                mapChildren.push(
+                                                    <Circle
+                                                        key="selected-location-circle"
+                                                        center={{
+                                                            latitude: selectedLocation.latitude,
+                                                            longitude: selectedLocation.longitude
+                                                        }}
+                                                        radius={clampRadiusValue(radiusMeters)}
+                                                        strokeColor="rgba(239, 68, 68, 0.6)"
+                                                        fillColor="rgba(239, 68, 68, 0.18)"
+                                                        strokeWidth={2}
+                                                    />
+                                                );
+                                            }
+
+                                            savedPlaces
+                                                .filter(loc => !(isEditMode && editingLocation?.id && String(loc.id) === String(editingLocation.id)))
+                                                .forEach((loc, idx) => {
+                                                    let markerTitle = loc.name || "Saved Place";
+                                                    let markerDescription: string | undefined;
+
+                                                    if (loc.metadata && typeof loc.metadata === 'object') {
+                                                        const meta = loc.metadata as any;
+                                                        markerDescription = meta.address || meta.formattedAddress;
+                                                    }
+
+                                                    mapChildren.push(
+                                                        <LocationMarker
+                                                            key={`other-loc-${loc.id || `${loc.latitude}-${loc.longitude}-${idx}`}`}
+                                                            coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
+                                                            title={markerTitle}
+                                                            description={markerDescription}
+                                                            radius={(loc.metadata as any)?.radius || DEFAULT_RADIUS_METERS}
+                                                            placeType={(loc.metadata as any)?.placeType}
+                                                            locationType={(loc.metadata as any)?.locationType}
+                                                            isAssignedToCurrentUser={false}
+                                                        />
+                                                    );
+                                                });
+
+                                            Object.entries(memberLocations)
+                                                .filter(([_, coords]) => coords && coords.latitude && coords.longitude)
+                                                .forEach(([mId, coords]) => {
+                                                    const isCurrentUser = currentUserId === mId;
+                                                    const memberRecord = members.find(m => {
+                                                        const mid = m.id || (m as any).userId || (m as any).UserId;
+                                                        return String(mid) === String(mId);
+                                                    });
+
+                                                    const displayName = isCurrentUser
+                                                        ? "You"
+                                                        : memberRecord?.Membership?.nickname || memberRecord?.name || memberRecord?.email || "Member";
+
+                                                    const fallbackSeed = memberRecord?.email ?? memberRecord?.name ?? memberRecord?.Membership?.nickname ?? mId ?? "member";
+                                                    const avatarCandidate = isCurrentUser ? currentUserAvatarUrl : mId ? memberAvatarUrls[mId] : null;
+                                                    let resolvedAvatar = avatarCandidate || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackSeed)}&background=random`;
+
+                                                    if (resolvedAvatar && resolvedAvatar.startsWith("/") && !resolvedAvatar.startsWith("http")) {
+                                                        resolvedAvatar = `${API_BASE_URL}${resolvedAvatar}`.replace("/api/uploads", "/uploads");
+                                                    }
+
+                                                    mapChildren.push(
+                                                        <MemberMarker
+                                                            key={`member-${mId}`}
+                                                            memberId={mId}
+                                                            coordinate={coords}
+                                                            displayName={displayName}
+                                                            avatarUrl={resolvedAvatar}
+                                                            speed={coords.speed}
+                                                            isCurrentUser={isCurrentUser}
+                                                            relation={memberRecord?.Membership?.metadata?.relation}
+                                                        />
+                                                    );
+                                                });
+
+                                            return mapChildren;
+                                        })()}
+                                    </MapView>
+                                    <View style={styles.centerMarkerContainer} pointerEvents="none">
+                                        <MarkerView pinColor={COLORS.accent} size={32}>
                                             <Ionicons
                                                 name="location-sharp"
-                                                size={20}
+                                                size={22}
                                                 color={COLORS.accent}
                                             />
-                                        </View>
-                                        <View style={[styles.dynamicMarkerPointer, { borderTopColor: COLORS.accent }]} />
+                                        </MarkerView>
                                     </View>
                                 </View>
+                                <Text style={styles.mapHint}>Move the map to align the pin.</Text>
+                                <Text style={styles.mapStatus}>{mapStatus}</Text>
                             </View>
-                            <Text style={styles.mapHint}>Move the map to align the pin.</Text>
-                            <Text style={styles.mapStatus}>{mapStatus}</Text>
                         </View>
 
-                        <View style={styles.placeTypeSection}>
-                            <Text style={styles.sectionLabel}>Place Type</Text>
-                            <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                contentContainerStyle={styles.placeTypeContainer}
-                            >
-                                {PLACE_TYPES.map((type) => (
-                                    <TouchableOpacity
-                                        key={type.value}
-                                        style={[
-                                            styles.placeTypeChip,
-                                            selectedPlaceType === type.value && styles.placeTypeChipSelected
-                                        ]}
-                                        onPress={() => setSelectedPlaceType(type.value)}
-                                    >
-                                        <Ionicons
-                                            name={type.icon as any}
-                                            size={18}
-                                            color={selectedPlaceType === type.value ? COLORS.white : COLORS.gray}
-                                            style={styles.placeTypeIcon}
-                                        />
-                                        <Text
+
+                        <View collapsable={false} key="place-type-section-container">
+                            <View style={styles.placeTypeSection}>
+                                <Text style={styles.sectionLabel}>Place Type</Text>
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    contentContainerStyle={styles.placeTypeContainer}
+                                >
+                                    {PLACE_TYPES.map((type) => (
+                                        <TouchableOpacity
+                                            key={type.value}
                                             style={[
-                                                styles.placeTypeLabel,
-                                                selectedPlaceType === type.value && styles.placeTypeLabelSelected
+                                                styles.placeTypeChip,
+                                                selectedPlaceType === type.value && styles.placeTypeChipSelected
                                             ]}
+                                            onPress={() => setSelectedPlaceType(type.value)}
                                         >
-                                            {type.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                        </View>
-
-                        {selectedLocation ? (
-                            <View style={styles.nicknameSection}>
-                                <Text style={styles.nicknameLabel}>{selectedLocation?.address || "Label this place"}</Text>
-                                <TextInput
-                                    value={placeNickname}
-                                    onChangeText={(value) => {
-                                        setPlaceNickname(value);
-                                        setHasEditedNickname(value.trim().length > 0);
-                                    }}
-                                    placeholder="e.g. Home, Office"
-                                    placeholderTextColor={COLORS.gray}
-                                    style={styles.nicknameInput}
-                                    returnKeyType="done"
-                                    editable={!isSavingLocation}
-                                    onSubmitEditing={handleSaveLocation}
-                                />
-                            </View>
-                        ) : null}
-
-                        <View style={styles.alertSection}>
-                            <View style={styles.alertItem}>
-                                <View style={styles.alertTextWrapper}>
-                                    <Text style={styles.alertTitle}>Arrival alert</Text>
-                                    <Text style={styles.alertSubtitle}>Notify circle when someone arrives</Text>
-                                </View>
-                                <Switch
-                                    value={isNotifyOnArrival}
-                                    onValueChange={setIsNotifyOnArrival}
-                                    trackColor={{ false: "#D1D5DB", true: COLORS.primary }}
-                                    thumbColor={COLORS.white}
-                                />
-                            </View>
-
-                            <View style={styles.alertItem}>
-                                <View style={styles.alertTextWrapper}>
-                                    <Text style={styles.alertTitle}>Departure alert</Text>
-                                    <Text style={styles.alertSubtitle}>Notify circle when someone leaves</Text>
-                                </View>
-                                <Switch
-                                    value={isNotifyOnDeparture}
-                                    onValueChange={setIsNotifyOnDeparture}
-                                    trackColor={{ false: "#D1D5DB", true: COLORS.primary }}
-                                    thumbColor={COLORS.white}
-                                />
+                                            <Ionicons
+                                                name={type.icon as any}
+                                                size={18}
+                                                color={selectedPlaceType === type.value ? COLORS.white : COLORS.gray}
+                                                style={styles.placeTypeIcon}
+                                            />
+                                            <Text
+                                                style={[
+                                                    styles.placeTypeLabel,
+                                                    selectedPlaceType === type.value && styles.placeTypeLabelSelected
+                                                ]}
+                                            >
+                                                {type.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    ))}
+                                </ScrollView>
                             </View>
                         </View>
 
-                        <TouchableOpacity
-                            style={[styles.primaryButton, styles.saveButton, isSaveDisabled && styles.primaryButtonDisabled]}
-                            onPress={handleSaveLocation}
-                            disabled={isSaveDisabled}
-                        >
-                            {isSavingLocation ? (
-                                <ActivityIndicator color={COLORS.white} />
-                            ) : (
-                                <Text style={styles.primaryButtonText}>{primaryButtonLabel}</Text>
-                            )}
-                        </TouchableOpacity>
+
+                        <View collapsable={false} key="nickname-status-wrapper">
+                            {selectedLocation ? (
+                                <View style={styles.nicknameSection}>
+                                    <Text style={styles.nicknameLabel}>{selectedLocation?.address || "Label this place"}</Text>
+                                    <TextInput
+                                        value={placeNickname}
+                                        onChangeText={(value) => {
+                                            setPlaceNickname(value);
+                                            setHasEditedNickname(value.trim().length > 0);
+                                        }}
+                                        placeholder="e.g. Home, Office"
+                                        placeholderTextColor={COLORS.gray}
+                                        style={styles.nicknameInput}
+                                        returnKeyType="done"
+                                        editable={!isSavingLocation}
+                                        onSubmitEditing={handleSaveLocation}
+                                    />
+                                </View>
+                            ) : <View style={{ height: 0 }} />}
+                        </View>
+
+
+
+                        <View collapsable={false} key="alert-section-container">
+                            <View style={styles.alertSection}>
+                                <View style={styles.alertItem}>
+                                    <View style={styles.alertTextWrapper}>
+                                        <Text style={styles.alertTitle}>Arrival alert</Text>
+                                        <Text style={styles.alertSubtitle}>Notify circle when someone arrives</Text>
+                                    </View>
+                                    <Switch
+                                        value={isNotifyOnArrival}
+                                        onValueChange={setIsNotifyOnArrival}
+                                        trackColor={{ false: "#D1D5DB", true: COLORS.primary }}
+                                        thumbColor={COLORS.white}
+                                    />
+                                </View>
+
+                                <View style={styles.alertItem}>
+                                    <View style={styles.alertTextWrapper}>
+                                        <Text style={styles.alertTitle}>Departure alert</Text>
+                                        <Text style={styles.alertSubtitle}>Notify circle when someone leaves</Text>
+                                    </View>
+                                    <Switch
+                                        value={isNotifyOnDeparture}
+                                        onValueChange={setIsNotifyOnDeparture}
+                                        trackColor={{ false: "#D1D5DB", true: COLORS.primary }}
+                                        thumbColor={COLORS.white}
+                                    />
+                                </View>
+                            </View>
+                        </View>
+
+                        <View collapsable={false} key="save-button-container">
+                            <TouchableOpacity
+                                style={[styles.primaryButton, styles.saveButton, isSaveDisabled && styles.primaryButtonDisabled]}
+                                onPress={handleSaveLocation}
+                                disabled={isSaveDisabled}
+                            >
+                                {isSavingLocation ? (
+                                    <ActivityIndicator color={COLORS.white} />
+                                ) : (
+                                    <Text style={styles.primaryButtonText}>{primaryButtonLabel}</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+
                     </ScrollView>
                 </KeyboardAvoidingView>
             </View>
@@ -1118,7 +1158,11 @@ const styles = StyleSheet.create({
         justifyContent: "center",
         alignItems: "center",
     },
+    resultsContainerWrapper: {
+        marginBottom: 16,
+    },
     searchResultsContainer: {
+
         maxHeight: 200,
         marginBottom: 16,
         borderWidth: 1,
@@ -1216,36 +1260,6 @@ const styles = StyleSheet.create({
         justifyContent: "center",
         alignItems: "center",
         zIndex: 10,
-    },
-    dynamicMarkerWrapper: {
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    dynamicMarkerCircle: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        borderWidth: 2,
-        backgroundColor: 'white',
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-        elevation: 5,
-    },
-    dynamicMarkerPointer: {
-        width: 0,
-        height: 0,
-        backgroundColor: 'transparent',
-        borderStyle: 'solid',
-        borderLeftWidth: 3,
-        borderRightWidth: 3,
-        borderTopWidth: 5,
-        borderLeftColor: 'transparent',
-        borderRightColor: 'transparent',
-        marginTop: -1,
     },
     mapHint: {
         fontSize: 12,

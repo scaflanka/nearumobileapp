@@ -19,6 +19,26 @@ import { NotificationItem, NotificationService } from "../services/NotificationS
 import { AlertProvider } from "./context/AlertContext";
 // ... imports
 
+// --- ADD GLOBAL CRASH LOGGER ---
+if ((global as any).ErrorUtils) {
+  const defaultErrorHandler = (global as any).ErrorUtils.getGlobalHandler();
+  (global as any).ErrorUtils.setGlobalHandler((error: Error, isFatal: boolean) => {
+    console.error("\n====================================");
+    console.error("🚨 FATAL JS CRASH DETECTED 🚨");
+    console.error("Fatal:", isFatal);
+    console.error("Error Message:", error.message);
+    console.error("Stack Trace:", error.stack);
+    console.error("====================================\n");
+
+    // Let Expo still show the red screen
+    if (defaultErrorHandler) {
+      defaultErrorHandler(error, isFatal);
+    }
+  });
+}
+// -------------------------------
+
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();

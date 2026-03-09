@@ -269,14 +269,16 @@ const JourneyMapItem = ({ history }: { history: JourneyHistoryPoint[] }) => {
                 } : undefined}
             >
                 {/* Road-snapped connecting line */}
-                <Polyline
-                    coordinates={roadCoords.length > 0 ? roadCoords : historyCoords}
-                    strokeWidth={5}
-                    strokeColor={COLORS.roadBlue}
-                    lineJoin="round"
-                    lineCap="round"
-                    geodesic={true}
-                />
+                {(roadCoords.length >= 2 || historyCoords.length >= 2) ? (
+                    <Polyline
+                        coordinates={roadCoords.length > 0 ? roadCoords : historyCoords}
+                        strokeWidth={5}
+                        strokeColor={COLORS.roadBlue}
+                        lineJoin="round"
+                        lineCap="round"
+                        geodesic={true}
+                    />
+                ) : null}
 
                 {sampledMarkers.map((point, idx) => (
                     <Marker
@@ -720,23 +722,23 @@ const styles = StyleSheet.create({
 
     // Numbered Journey Points
     numberedMarker: {
-        width: 16,
-        height: 16,
-        borderRadius: 8,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
         backgroundColor: COLORS.roadBlue,
         borderWidth: 1.5,
         borderColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.2,
-        shadowRadius: 1.41,
-        elevation: 2,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 3,
+        elevation: 4,
     },
     numberedMarkerText: {
         color: COLORS.white,
-        fontSize: 8,
+        fontSize: 12,
         fontWeight: '900',
     },
     mapControls: {

@@ -4,6 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
+    Clipboard,
     Dimensions,
     FlatList,
     Keyboard,
@@ -746,7 +747,24 @@ const CirclesModal: React.FC<CirclesModalProps> = ({
                     <View style={styles.codeDisplayContainerLightBlue}>
                         {hasCode ? (
                             <>
-                                <Text style={styles.codeTextBlueH1}>{generatedCode}</Text>
+
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+
+                                  <Text style={styles.codeTextBlueH1}>{generatedCode}</Text>
+                                <TouchableOpacity
+                                    style={styles.copyButton}
+                                    onPress={() => {
+                                        if (generatedCode) {
+                                            Clipboard.setString(generatedCode);
+                                            showAlert({ title: "Copied", message: "Code copied to clipboard", type: 'success' });
+                                        }
+                                    }}
+                                >
+                                    <Ionicons name="copy-outline" size={24} color="#113C9C" />
+                                </TouchableOpacity>
+
+                            </View>
+                              
                                 <Text style={styles.codeExpiryBlue}>
                                     This code will be active for 2 days
                                 </Text>
@@ -1097,5 +1115,17 @@ const styles = StyleSheet.create({
         marginTop: -10,
         marginBottom: 10,
         marginLeft: 4,
+    },
+
+    copyButton: {
+        marginLeft: 16,
+        padding: 8,
+        backgroundColor: "#fff",
+        borderRadius: 12,
+        elevation: 2,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
     },
 });

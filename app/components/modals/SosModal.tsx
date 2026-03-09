@@ -15,7 +15,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE_URL, authenticatedFetch } from "../../../utils/auth";
+import { requestLocationPermissions } from "../../../utils/permissions";
 import { useAlert } from "../../context/AlertContext";
+
 // If CircleMember is not exported from types/models, I might need to import it or define a partial interface.
 // Based on MapScreen.tsx it is exported.
 import { CircleMember } from "../../types/models";
@@ -89,8 +91,9 @@ const SosModal: React.FC<SosModalProps> = ({
             const message = "SOS Emergency Alert!";
 
             try {
-                const { status: locStatus } = await Location.requestForegroundPermissionsAsync();
-                if (locStatus === 'granted') {
+                const { foreground } = await requestLocationPermissions(false);
+                if (foreground === 'granted') {
+
                     const location = await Location.getCurrentPositionAsync({
                         accuracy: Location.Accuracy.High
                     });
@@ -305,23 +308,26 @@ const SosModal: React.FC<SosModalProps> = ({
                         )}
 
                         {/* Slide to Cancel */}
-                        <View
-                            style={styles.sliderContainer}
-                            pointerEvents={status === "SENT" ? "none" : "auto"}
-                        >
-                            <View style={styles.sliderTrack}>
-                                <Text style={styles.sliderText}>
-                                    {status === "COUNTDOWN" ? "Slide to Cancel Sending" : "Slide to Cancel SOS"}
-                                </Text>
-                                <Animated.View
-                                    style={[styles.sliderKnob, { transform: [{ translateX: slideAnim }] }]}
-                                    {...panResponder.panHandlers}
-                                >
-                                    <Ionicons name="chevron-back" size={24} color="#EF4444" />
-                                    <Ionicons name="chevron-back" size={24} color="#EF4444" style={{ marginLeft: -10 }} />
-                                </Animated.View>
+                        {status !== "SENT" && (
+                            <View
+                                style={styles.sliderContainer}
+                                pointerEvents="auto"
+                            >
+                                <View style={styles.sliderTrack}>
+                                    <Text style={styles.sliderText}>
+                                        {status === "COUNTDOWN" ? "Slide to Cancel Sending" : "Slide to Cancel SOS"}
+                                    </Text>
+                                    <Animated.View
+                                        style={[styles.sliderKnob, { transform: [{ translateX: slideAnim }] }]}
+                                        {...panResponder.panHandlers}
+                                    >
+                                        <Ionicons name="chevron-forward" size={24} color="#EF4444" />
+                                        <Ionicons name="chevron-forward" size={24} color="#EF4444" style={{ marginLeft: -10 }} />
+                                    </Animated.View>
+
+                                </View>
                             </View>
-                        </View>
+                        )}
                     </View>
                 )}
 

@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   Dimensions,
   FlatList,
   Image,
@@ -25,6 +26,7 @@ import {
   View
 } from "react-native";
 import MapView, { Circle, Marker, Polyline } from "react-native-maps";
+import Svg, { Defs, FeBlend, FeColorMatrix, FeFlood, FeGaussianBlur, FeMorphology, FeOffset, Filter, G, Mask, Path, Rect } from 'react-native-svg';
 import { isBackgroundLocationRunning, startBackgroundLocation, stopBackgroundLocation } from "../../services/BackgroundLocationService";
 import { useAlert } from "../context/AlertContext";
 
@@ -50,7 +52,8 @@ import {
 import { formatToSLTime } from "../../utils/dateHelpers";
 import { storeLastKnownLocation } from "../../utils/locationCache";
 import { setNotificationReceptionEnabled } from "../../utils/notificationListeners";
-import { requestNotificationPermissions } from "../../utils/permissions";
+import { requestLocationPermissions, requestNotificationPermissions } from "../../utils/permissions";
+
 import NotificationIcon from "../components/icons/NotificationIcon";
 import StartupLoading from "../components/StartupLoading";
 
@@ -69,7 +72,7 @@ import {
   UserLocation,
 } from "../types/models";
 // --- Custom Modals ---
-import { LocationMarker, MemberMarker } from "../components/MapMarkers";
+import { AdvancedMarker, LocationMarker, MemberMarker } from "../components/MapMarkers";
 import AccountModal from "../components/modals/AccountModal";
 import AddPeopleModal from "../components/modals/AddPeopleModal";
 import AddPlaceModal from "../components/modals/AddPlaceModal";
@@ -133,11 +136,85 @@ function splitIntoJourneys(history: LocationHistoryEntry[]): LocationHistoryEntr
 
 // --- Constants ---
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get("window");
+
+// --- SVG Components ---
+const CheckInIcon = () => (
+  <Svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+    <G filter="url(#filter0_d_288_2663)">
+      <Rect x="11" y="9" width="42" height="42" rx="21" fill="#C6D8FF" />
+    </G>
+    <Path
+      d="M32 19.7998C36.5553 19.7998 40.2002 23.3754 40.2002 27.75C40.2002 29.7603 39.6077 31.6503 38.5127 33.3701L38.5117 33.3711C37.9272 34.2923 37.2467 35.1543 36.5342 36.0527C35.8306 36.94 35.0944 37.8648 34.4521 38.8662C33.8217 39.8443 33.3677 40.754 32.9004 41.7754C32.8049 41.9718 32.707 42.2182 32.6318 42.3955C32.547 42.5957 32.4696 42.7629 32.3848 42.9004C32.2211 43.1656 32.1149 43.2002 32 43.2002C31.8851 43.2002 31.7789 43.1656 31.6152 42.9004C31.5304 42.7629 31.453 42.5957 31.3682 42.3955C31.3306 42.3069 31.2869 42.2011 31.2412 42.0928L31.0996 41.7754C30.6323 40.754 30.1783 39.8443 29.5479 38.8662C28.9056 37.8648 28.1694 36.94 27.4658 36.0527C26.7533 35.1543 26.0728 34.2923 25.4883 33.3711L25.4873 33.3701C24.3923 31.6503 23.7998 29.7603 23.7998 27.75C23.7998 23.3754 27.4447 19.7998 32 19.7998Z"
+      stroke="#113C9C"
+      strokeWidth="1.6"
+    />
+    <Path
+      d="M32 33V25M28 29H36"
+      stroke="#113C9C"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <Defs>
+      <Filter id="filter0_d_288_2663" x="0" y="0" width="64" height="64" filterUnits="userSpaceOnUse">
+        <FeFlood floodOpacity="0" result="BackgroundImageFix" />
+        <FeColorMatrix
+          in="SourceAlpha"
+          type="matrix"
+          values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
+          result="hardAlpha"
+        />
+        <FeMorphology radius="1" operator="dilate" in="SourceAlpha" result="effect1_dropShadow_288_2663" />
+        <FeOffset dy="2" />
+        <FeGaussianBlur stdDeviation="5" />
+        <FeColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.1 0" />
+        <FeBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_288_2663" />
+        <FeBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_288_2663" result="shape" />
+      </Filter>
+    </Defs>
+  </Svg>
+);
+
+const SosIcon = () => (
+  <Svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+    <G filter="url(#filter0_d_288_2667)">
+      <Rect x="11" y="9" width="42" height="42" rx="21" fill="#FB3748" />
+    </G>
+    <Path d="M32.8182 37H31.1818C30.5818 37 30.0909 37.4909 30.0909 38.0909V41.3636C30.0909 41.9636 30.5818 42.4545 31.1818 42.4545H32.8182C33.4182 42.4545 33.9091 41.9636 33.9091 41.3636V38.0909C33.9091 37.4909 33.4182 37 32.8182 37ZM32.8182 41.3636H31.1818V38.0909H32.8182V41.3636ZM26 41.3636H28.1818V40.2727H27.0909C26.4909 40.2727 26 39.7818 26 39.1818V38.0909C26 37.4909 26.4909 37 27.0909 37H29.2727V38.0909H27.0909V39.1818H28.1818C28.7818 39.1818 29.2727 39.6727 29.2727 40.2727V41.3636C29.2727 41.9636 28.7818 42.4545 28.1818 42.4545H26V41.3636ZM34.7273 41.3636H36.9091V40.2727H35.8182C35.2182 40.2727 34.7273 39.7818 34.7273 39.1818V38.0909C34.7273 37.4909 35.2182 37 35.8182 37H38V38.0909H35.8182V39.1818H36.9091C37.5091 39.1818 38 39.6727 38 40.2727V41.3636C38 41.9636 37.5091 42.4545 36.9091 42.4545H34.7273V41.3636Z" fill="white" />
+    <Path d="M33.45 34.475C33.0667 34.8583 32.5917 35.05 32.025 35.05C31.4583 35.05 30.9833 34.8583 30.6 34.475L22.575 26.45C22.1917 26.0667 22 25.5917 22 25.025C22 24.4583 22.1917 23.9833 22.575 23.6L30.6 15.575C30.9833 15.1917 31.4583 15 32.025 15C32.5917 15 33.0667 15.1917 33.45 15.575L41.475 23.6C41.8583 23.9833 42.05 24.4583 42.05 25.025C42.05 25.5917 41.8583 26.0667 41.475 26.45L33.45 34.475ZM32.025 33.05L40.05 25.025L32.025 17L24 25.025L32.025 33.05ZM31.025 26.025H33.025V20.025H31.025V26.025ZM32.025 29.025C32.3083 29.025 32.546 28.929 32.738 28.737C32.9293 28.5457 33.025 28.3083 33.025 28.025C33.025 27.7417 32.9293 27.504 32.738 27.312C32.546 27.1207 32.3083 27.025 32.025 27.025C31.7417 27.025 31.5043 27.1207 31.313 27.312C31.121 27.504 31.025 27.7417 31.025 28.025C31.025 28.3083 31.121 28.5457 31.313 28.737C31.5043 28.929 31.7417 29.025 32.025 29.025Z" fill="white" />
+    <Defs>
+      <Filter id="filter0_d_288_2667" x="0" y="0" width="64" height="64" filterUnits="userSpaceOnUse">
+        <FeFlood floodOpacity="0" result="BackgroundImageFix" />
+        <FeColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha" />
+        <FeMorphology radius="1" operator="dilate" in="SourceAlpha" result="effect1_dropShadow_288_2667" />
+        <FeOffset dy="2" />
+        <FeGaussianBlur stdDeviation="5" />
+        <FeColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.1 0" />
+        <FeBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_288_2667" />
+        <FeBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_288_2667" result="shape" />
+      </Filter>
+    </Defs>
+  </Svg>
+);
+
+const MyLocationIcon = () => (
+  <Svg width="21" height="21" viewBox="0 0 21 21" fill="none">
+    <Path d="M1.75 10.5C1.75 15.3325 5.66751 19.25 10.5 19.25V17.7188C6.51319 17.7188 3.28125 14.4868 3.28125 10.5H1.75ZM10.5 19.25C15.3325 19.25 19.25 15.3325 19.25 10.5H17.7188C17.7188 14.4868 14.4868 17.7188 10.5 17.7188V19.25ZM19.25 10.5C19.25 5.66751 15.3325 1.75 10.5 1.75V3.28125C14.4868 3.28125 17.7188 6.51319 17.7188 10.5H19.25ZM10.5 1.75C5.66751 1.75 1.75 5.66751 1.75 10.5H3.28125C3.28125 6.51319 6.51319 3.28125 10.5 3.28125V1.75Z" fill="#113C9C" />
+    <Path d="M18.7022 10.6124H20.5H18.7022ZM10.3876 18.7022V20.5V18.7022ZM0.5 10.6124H2.29775H0.5ZM10.3876 0.5V2.29775V0.5Z" fill="#113C9C" />
+    <Path d="M18.7022 10.6124H20.5M10.3876 18.7022V20.5M0.5 10.6124H2.29775M10.3876 0.5V2.29775" stroke="#113C9C" strokeLinecap="round" />
+    <Mask id="path-4-inside-1_288_236" fill="white">
+      <Path d="M15.5 10.5C15.5 13.2614 13.2614 15.5 10.5 15.5V13.6579C12.2441 13.6579 13.6579 12.2441 13.6579 10.5H15.5ZM10.5 15.5C7.73858 15.5 5.5 13.2614 5.5 10.5H7.34211C7.34211 12.2441 8.75595 13.6579 10.5 13.6579V15.5ZM5.5 10.5C5.5 7.73858 7.73858 5.5 10.5 5.5V7.34211C8.75595 7.34211 7.34211 8.75595 7.34211 10.5H5.5ZM10.5 5.5C13.2614 5.5 15.5 7.73858 15.5 10.5H13.6579C13.6579 8.75595 12.2441 7.34211 10.5 7.34211V5.5Z" />
+    </Mask>
+    <Path d="M15.5 10.5C15.5 13.2614 13.2614 15.5 10.5 15.5V13.6579C12.2441 13.6579 13.6579 12.2441 13.6579 10.5H15.5ZM10.5 15.5C7.73858 15.5 5.5 13.2614 5.5 10.5H7.34211C7.34211 12.2441 8.75595 13.6579 10.5 13.6579V15.5ZM5.5 10.5C5.5 7.73858 7.73858 5.5 10.5 5.5V7.34211C8.75595 7.34211 7.34211 8.75595 7.34211 10.5H5.5ZM10.5 5.5C13.2614 5.5 15.5 7.73858 15.5 10.5H13.6579C13.6579 8.75595 12.2441 7.34211 10.5 7.34211V5.5Z" fill="#113C9C" />
+    <Path d="M10.5 15.5H12.5V13.6579H10.5H8.5V15.5H10.5ZM13.6579 10.5V12.5H15.5V10.5V8.5H13.6579V10.5ZM5.5 10.5V12.5H7.34211V10.5V8.5H5.5V10.5ZM10.5 5.5H8.5V7.34211H10.5H12.5V5.5H10.5ZM15.5 10.5H11.5C11.5 11.0523 11.0523 11.5 10.5 11.5V15.5V19.5C15.4706 19.5 19.5 15.4706 19.5 10.5H15.5ZM10.5 13.6579V17.6579C14.4532 17.6579 17.6579 14.4532 17.6579 10.5H13.6579H9.6579C9.6579 10.0349 10.0349 9.6579 10.5 9.6579V13.6579ZM10.5 15.5V11.5C9.94772 11.5 9.5 11.0523 9.5 10.5H5.5H1.5C1.5 15.4706 5.52944 19.5 10.5 19.5V15.5ZM7.34211 10.5H3.34211C3.34211 14.4532 6.54681 17.6579 10.5 17.6579V13.6579V9.6579C10.9651 9.6579 11.3421 10.0349 11.3421 10.5H7.34211ZM5.5 10.5H9.5C9.5 9.94772 9.94772 9.5 10.5 9.5V5.5V1.5C5.52944 1.5 1.5 5.52944 1.5 10.5H5.5ZM10.5 7.34211V3.34211C6.54681 3.34211 3.34211 6.54681 3.34211 10.5H7.34211H11.3421C11.3421 10.9651 10.9651 11.3421 10.5 11.3421V7.34211ZM10.5 5.5V9.5C11.0523 9.5 11.5 9.94772 11.5 10.5H15.5H19.5C19.5 5.52944 15.4706 1.5 10.5 1.5V5.5ZM13.6579 10.5H17.6579C17.6579 6.54681 14.4532 3.34211 10.5 3.34211V7.34211V11.3421C10.0349 11.3421 9.6579 10.9651 9.6579 10.5H13.6579Z" fill="#113C9C" mask="url(#path-4-inside-1_288_236)" />
+  </Svg>
+);
+
 const TOP_HEADER_HEIGHT = 60;
 const TAB_BAR_HEIGHT = 85;
 const HANDLE_HEIGHT = 30;
 
-const MAX_HEIGHT = SCREEN_HEIGHT * 0.75;
+const MAX_HEIGHT = SCREEN_HEIGHT * (2 / 3);
 const MIN_HEIGHT = TAB_BAR_HEIGHT + HANDLE_HEIGHT;
 const MID_HEIGHT = MIN_HEIGHT + (MAX_HEIGHT - MIN_HEIGHT) / 2;
 const INITIAL_SHEET_HEIGHT = MID_HEIGHT;
@@ -157,6 +234,7 @@ const STORAGE_KEYS = {
   locationSharingEnabled: "user_location_sharing_enabled",
   notificationsEnabled: "user_notifications_enabled",
   mapStyle: "user_map_style",
+  driveDetectionEnabled: "user_drive_detection_enabled",
 };
 
 const BACKGROUND_LOCATION_TASK_NAME = "circle-location-background-task";
@@ -2182,6 +2260,20 @@ const MapScreen: React.FC = () => {
   const fetchCircleMembersInFlightRef = useRef(new Set<string>());
   const memberFetchTimestampsRef = useRef<Record<string, number>>({});
   const { showAlert } = useAlert();
+
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        BackHandler.exitApp();
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+      return () => subscription.remove();
+    }, [])
+  );
+
   const [activeSection, setActiveSection] = useState<'members' | 'place' | 'key'>('members');
   const [selectedDrivingMemberId, setSelectedDrivingMemberId] = useState<string | "all">("all");
   const [profileNameInput, setProfileNameInput] = useState("");
@@ -2203,6 +2295,7 @@ const MapScreen: React.FC = () => {
   const [isSosModalOpen, setIsSosModalOpen] = useState(false);
   const [isAddPeopleModalOpen, setIsAddPeopleModalOpen] = useState(false);
   const [isSmartNotificationModalOpen, setIsSmartNotificationModalOpen] = useState(false);
+  const [driveDetectionEnabled, setDriveDetectionEnabled] = useState(false);
 
   // Add Place Modal State
   const [isAddPlaceModalOpen, setIsAddPlaceModalOpen] = useState(false);
@@ -2420,30 +2513,26 @@ const MapScreen: React.FC = () => {
 
     try {
       if (nextValue) {
-        const permission = await Location.requestForegroundPermissionsAsync();
-        if (permission.status !== "granted") {
+        const { foreground, background } = await requestLocationPermissions(isNativePlatform);
+
+        if (foreground !== "granted") {
           showAlert({
             title: "Permission needed",
             message: "Allow location access in your device settings to share your location with the circle.",
             type: 'warning'
           });
+          setIsUpdatingLocationSharing(false); // Reset state on denial
           return;
         }
 
-        if (isNativePlatform) {
-          try {
-            const backgroundPermission = await Location.requestBackgroundPermissionsAsync();
-            if (backgroundPermission.status !== "granted") {
-              showAlert({
-                title: "Background access limited",
-                message: "We'll share your location while the app is open. Enable background access in system settings for continuous updates.",
-                type: 'info'
-              });
-            }
-          } catch (backgroundError) {
-            console.warn("Failed to request background location permission", backgroundError);
-          }
+        if (isNativePlatform && background !== "granted") {
+          showAlert({
+            title: "Background access limited",
+            message: "We'll share your location while the app is open. Enable background access in system settings for continuous updates.",
+            type: 'info'
+          });
         }
+
 
         if (!locationRef.current) {
           try {
@@ -2566,9 +2655,10 @@ const MapScreen: React.FC = () => {
 
     const hydrateSettings = async () => {
       try {
-        const [storedLocationSharing, storedNotifications] = await Promise.all([
+        const [storedLocationSharing, storedNotifications, storedDriveDetection] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.locationSharingEnabled),
           AsyncStorage.getItem(STORAGE_KEYS.notificationsEnabled),
+          AsyncStorage.getItem(STORAGE_KEYS.driveDetectionEnabled),
         ]);
 
         if (cancelled) {
@@ -2595,6 +2685,9 @@ const MapScreen: React.FC = () => {
         if (initialNotifications) {
           await requestNotificationPermissions();
         }
+
+        const driveDetection = storedDriveDetection === "true";
+        setDriveDetectionEnabled(driveDetection);
 
         const storedMapStyle = await AsyncStorage.getItem(STORAGE_KEYS.mapStyle);
         if (storedMapStyle && ['standard', 'satellite', 'hybrid', 'terrain'].includes(storedMapStyle)) {
@@ -3557,10 +3650,11 @@ const MapScreen: React.FC = () => {
 
         // Step 1: Permissions
         setStartupStatus("Checking permissions...");
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { foreground } = await requestLocationPermissions(false); // Only foreground for startup speed
         setStartupProgress(0.15);
 
-        if (status === "granted") {
+        if (foreground === "granted") {
+
           try {
             setStartupStatus("Getting location...");
             const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -3807,25 +3901,11 @@ const MapScreen: React.FC = () => {
         }
 
         // Check Permissions
-        const foregroundPermissions = await Location.getForegroundPermissionsAsync();
-        let foregroundStatus = foregroundPermissions.status;
-        if (foregroundStatus !== "granted") {
-          const request = await Location.requestForegroundPermissionsAsync();
-          foregroundStatus = request.status;
-          if (foregroundStatus !== "granted") {
-            return;
-          }
+        const { foreground, background } = await requestLocationPermissions(true);
+        if (foreground !== "granted" || background !== "granted") {
+          return;
         }
 
-        const backgroundPermissions = await Location.getBackgroundPermissionsAsync();
-        let backgroundStatus = backgroundPermissions.status;
-        if (backgroundStatus !== "granted") {
-          const request = await Location.requestBackgroundPermissionsAsync();
-          backgroundStatus = request.status;
-          if (backgroundStatus !== "granted") {
-            return;
-          }
-        }
 
         const hasStarted = await isBackgroundLocationRunning();
         if (!hasStarted) {
@@ -4964,6 +5044,25 @@ const MapScreen: React.FC = () => {
 
 
 
+
+  const handleLocateUser = useCallback(() => {
+    const currentLoc = locationRef.current;
+    if (currentLoc && mapRef.current) {
+      mapRef.current.animateToRegion({
+        latitude: currentLoc.latitude,
+        longitude: currentLoc.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    } else {
+      showAlert({
+        title: "Location unavailable",
+        message: "We couldn't find your current location yet. Please make sure location services are enabled.",
+        type: 'info'
+      });
+    }
+  }, [showAlert]);
+
   const handlePressSos = useCallback(() => {
     if (!selectedCircle) {
       showAlert({ title: "Select a circle", message: "Choose a circle before sending an SOS alert.", type: 'info' });
@@ -5645,12 +5744,13 @@ const MapScreen: React.FC = () => {
   //   }
   // };
 
-
   const renderMemberMarker = (
     memberId: string | null,
     coordinate: UserLocation | null | undefined,
     isCurrentUser: boolean
   ): React.ReactElement | null => {
+    const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
+
     if (!coordinate || !isValidCoordinate(coordinate.latitude, coordinate.longitude)) {
       return null;
     }
@@ -5660,7 +5760,6 @@ const MapScreen: React.FC = () => {
       ? userDisplayName || "You"
       : (memberRecord as any)?.Membership?.nickname || memberRecord?.name || (memberRecord as any)?.email || "Circle member";
 
-    const safeMemberId = memberId ?? (isCurrentUser ? "current-user" : null);
     const fallbackSeed = (memberRecord as any)?.email ?? memberRecord?.name ?? (memberRecord as any)?.Membership?.nickname ?? safeMemberId ?? displayName ?? "member";
     const avatarCandidate = isCurrentUser ? currentUserAvatarUrl : memberId ? memberAvatarUrls[memberId] : null;
     let resolvedAvatar = typeof avatarCandidate === "string" && avatarCandidate.trim().length > 0 ? avatarCandidate.trim() : null;
@@ -5690,12 +5789,14 @@ const MapScreen: React.FC = () => {
         displayName={displayName}
         avatarUrl={resolvedAvatar}
         speed={coordinate.speed}
+        driveDetectionEnabled={driveDetectionEnabled}
         isCurrentUser={isCurrentUser}
         relation={(memberRecord as any)?.Membership?.metadata?.relation}
         onPress={() => !isCurrentUser && memberRecord && handleOpenMemberJourneysModal(memberRecord)}
       />
     );
   };
+
 
   // Helper to keep the render function clean
   const getBatteryIconName = (val: number | null) => {
@@ -5888,113 +5989,122 @@ const MapScreen: React.FC = () => {
             // No-op for now as we use standard OSM tiles
           }}
         >
-          {location && userAccuracyRadius ? (
-            <Circle
-              key="user-accuracy-circle"
-              center={{ latitude: location.latitude, longitude: location.longitude }}
-              radius={userAccuracyRadius}
-              strokeColor={USER_ACCURACY_STROKE_COLOR}
-              fillColor={USER_ACCURACY_FILL_COLOR}
-              strokeWidth={1.5}
-            />
-          ) : null}
+          {(() => {
+            const mapChildren = [];
 
-          {/* Render Member Journeys (Polylines) */}
+            if (location && userAccuracyRadius) {
+              mapChildren.push(
+                <Circle
+                  key="user-accuracy-circle"
+                  center={{
+                    latitude: location.latitude,
+                    longitude: location.longitude
+                  }}
+                  radius={userAccuracyRadius}
+                  strokeColor={USER_ACCURACY_STROKE_COLOR}
+                  fillColor={USER_ACCURACY_FILL_COLOR}
+                  strokeWidth={1.5}
+                />
+              );
+            }
 
+            Object.entries(memberLocations)
+              .filter(([mid, coords]) => mid !== currentUserId && coords && isValidCoordinate(coords.latitude, coords.longitude))
+              .forEach(([memberId, coords]) => {
+                const marker = renderMemberMarker(memberId, coords, false);
+                if (marker) mapChildren.push(marker);
+              });
 
-          {/* Render OTHER member markers */}
-          {Object.entries(memberLocations)
-            .filter(([mid]) => mid !== currentUserId)
-            .map(([memberId, coords]) => {
-              return renderMemberMarker(memberId, coords, false);
-            })}
+            const currentUserMarker = renderMemberMarker(currentUserId, location, true);
+            if (currentUserMarker) mapChildren.push(currentUserMarker);
 
-          {/* Render LOGGED-IN user marker separately for stability */}
-          {location && renderMemberMarker(currentUserId, location, true)}
-
-          {currentLocations.flatMap((loc: LocationPoint, index: number) => {
-            let metadataAddress: string | undefined;
-            if (loc.metadata && typeof loc.metadata === "object") {
-              const metadataRecord = loc.metadata as Record<string, unknown>;
-              const addressValue = metadataRecord.address;
-              const formattedValue = metadataRecord.formattedAddress;
-              if (typeof addressValue === "string" && addressValue.trim().length > 0) {
-                metadataAddress = addressValue.trim();
-              } else if (typeof formattedValue === "string" && formattedValue.trim().length > 0) {
-                metadataAddress = formattedValue.trim();
+            currentLocations.forEach((loc: LocationPoint, index: number) => {
+              let metadataAddress: string | undefined;
+              if (loc.metadata && typeof loc.metadata === "object") {
+                const metadataRecord = loc.metadata as Record<string, unknown>;
+                const addressValue = metadataRecord.address;
+                const formattedValue = metadataRecord.formattedAddress;
+                if (typeof addressValue === "string" && addressValue.trim().length > 0) {
+                  metadataAddress = addressValue.trim();
+                } else if (typeof formattedValue === "string" && formattedValue.trim().length > 0) {
+                  metadataAddress = formattedValue.trim();
+                }
               }
+
+              let markerTitle = "Saved Place";
+              if (typeof loc.name === "string" && loc.name.trim().length > 0) {
+                markerTitle = loc.name.trim();
+              } else if (metadataAddress) {
+                markerTitle = metadataAddress;
+              }
+
+              let markerDescription: string | undefined;
+              if (metadataAddress && metadataAddress !== markerTitle) {
+                markerDescription = metadataAddress;
+              }
+
+              const markerKey = loc.id ? `loc-${loc.id}` : `loc-${loc.latitude}-${loc.longitude}-${index}`;
+              const circleRadius = getRadiusForLocation(loc);
+              const normalizedId = normalizeIdentifier(loc.id);
+              const isAssignedToCurrentUser =
+                currentUserAssignedLocationId !== null && normalizedId !== null && normalizedId === currentUserAssignedLocationId;
+
+              const assignedSubtitle = isAssignedToCurrentUser ? "Assigned to you" : undefined;
+              const calloutDescription = assignedSubtitle
+                ? markerDescription
+                  ? `${markerDescription}\n${assignedSubtitle}`
+                  : assignedSubtitle
+                : markerDescription;
+
+              mapChildren.push(
+                <LocationMarker
+                  key={markerKey}
+                  coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
+                  title={markerTitle}
+                  description={calloutDescription}
+                  radius={circleRadius}
+                  placeType={(loc.metadata as any)?.placeType}
+                  locationType={(loc.metadata as any)?.locationType}
+                  isAssignedToCurrentUser={isAssignedToCurrentUser}
+                />
+              );
+            });
+
+            if (fallbackAssignedMarker) {
+              mapChildren.push(
+                <Circle
+                  key="assigned-fallback-circle"
+                  center={{
+                    latitude: fallbackAssignedMarker.latitude ?? 0,
+                    longitude: fallbackAssignedMarker.longitude ?? 0,
+                  }}
+                  radius={fallbackAssignedMarker.radius ?? DEFAULT_LOCATION_RADIUS_METERS}
+                  strokeColor={ASSIGNED_LOCATION_STROKE_COLOR}
+                  fillColor={ASSIGNED_LOCATION_FILL_COLOR}
+                  strokeWidth={2}
+                />
+              );
+              mapChildren.push(
+                <AdvancedMarker
+                  key="assigned-fallback-marker"
+                  identifier="assigned-fallback"
+                  coordinate={{
+                    latitude: fallbackAssignedMarker.latitude ?? 0,
+                    longitude: fallbackAssignedMarker.longitude ?? 0,
+                  }}
+                  title={fallbackAssignedMarker.title ?? ""}
+                  description={fallbackAssignedMarker.subtitle ? `${fallbackAssignedMarker.subtitle}\nAssigned to you` : "Assigned to you"}
+                  zIndex={2}
+                  pinColor="#FACC15"
+                  backgroundColor="#FFF"
+                >
+                  <Ionicons name="star" size={18} color="#FACC15" />
+                </AdvancedMarker>
+              );
             }
 
-            let markerTitle = "Saved Place";
-            if (typeof loc.name === "string" && loc.name.trim().length > 0) {
-              markerTitle = loc.name.trim();
-            } else if (metadataAddress) {
-              markerTitle = metadataAddress;
-            }
-
-            let markerDescription: string | undefined;
-            if (metadataAddress && metadataAddress !== markerTitle) {
-              markerDescription = metadataAddress;
-            }
-
-            const markerKey = loc.id ? `loc-${loc.id}` : `loc-${index}`;
-            const circleKey = `${markerKey}-circle`;
-            const markerNodeKey = `${markerKey}-marker`;
-            const circleRadius = getRadiusForLocation(loc);
-            const normalizedId = normalizeIdentifier(loc.id);
-            const isAssignedToCurrentUser =
-              currentUserAssignedLocationId !== null && normalizedId !== null && normalizedId === currentUserAssignedLocationId;
-
-            const assignedSubtitle = isAssignedToCurrentUser ? "Assigned to you" : undefined;
-            const calloutDescription = assignedSubtitle
-              ? markerDescription
-                ? `${markerDescription}\n${assignedSubtitle}`
-                : assignedSubtitle
-              : markerDescription;
-
-            return (
-              <LocationMarker
-                key={markerKey}
-                coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
-                title={markerTitle}
-                description={calloutDescription}
-                radius={circleRadius}
-                placeType={(loc.metadata as any)?.placeType}
-                locationType={(loc.metadata as any)?.locationType}
-                isAssignedToCurrentUser={isAssignedToCurrentUser}
-              />
-            );
-          })}
-
-          {fallbackAssignedMarker
-            ? [
-              <Circle
-                key="assigned-fallback-circle"
-                center={{
-                  latitude: fallbackAssignedMarker.latitude,
-                  longitude: fallbackAssignedMarker.longitude,
-                }}
-                radius={fallbackAssignedMarker.radius ?? DEFAULT_LOCATION_RADIUS_METERS}
-                strokeColor={ASSIGNED_LOCATION_STROKE_COLOR}
-                fillColor={ASSIGNED_LOCATION_FILL_COLOR}
-                strokeWidth={2}
-              />,
-              <Marker
-                key="assigned-fallback-marker"
-                identifier="assigned-fallback"
-                coordinate={{
-                  latitude: fallbackAssignedMarker.latitude,
-                  longitude: fallbackAssignedMarker.longitude,
-                }}
-                title={fallbackAssignedMarker.title}
-                description={fallbackAssignedMarker.subtitle ? `${fallbackAssignedMarker.subtitle}\nAssigned to you` : "Assigned to you"}
-                zIndex={2}
-                anchor={{ x: 0.5, y: 1 }}
-              >
-                <Ionicons name="star" size={30} color="#FACC15" />
-              </Marker>,
-            ]
-            : null}
+            return mapChildren;
+          })()}
 
         </MapView>
 
@@ -6020,7 +6130,7 @@ const MapScreen: React.FC = () => {
         </View>
 
         <TouchableOpacity
-          style={[styles.roundButton, styles.floatingChatButton, { top: insets.top + SCREEN_HEIGHT * 0.25 }]}
+          style={[styles.roundButton, styles.floatingChatButton, { top: insets.top + 70 }]}
           onPress={handleOpenChat}
         >
           <Ionicons name="chatbubble-ellipses-outline" size={24} color={COLORS.black} />
@@ -6033,24 +6143,28 @@ const MapScreen: React.FC = () => {
             { bottom: Animated.add(sheetHeight, 20) }
           ]}
         >
-          <TouchableOpacity style={styles.pillButton} onPress={handleNavigateToAddPlace}>
-            <View style={styles.iconCirclePurple}><Ionicons name="checkmark" size={16} color={COLORS.white} /></View>
-            <Text style={styles.pillButtonText}>Check in</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center', marginTop: 10 }}>
+            <TouchableOpacity style={styles.pillOverride} onPress={handleNavigateToAddPlace}>
+              <CheckInIcon />
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.pillButton}
-            onPress={handlePressSos}
-          >
-            <View style={styles.iconCircleRed}><MaterialCommunityIcons name="lifebuoy" size={18} color={COLORS.white} /></View>
-            <Text style={styles.pillButtonText}>SOS</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.pillOverride}
+              onPress={handlePressSos}
+            >
+              <SosIcon />
+            </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity style={styles.roundButtonSmall} onPress={handleOpenMapLayersModal}>
-            <Ionicons name="layers" size={22} color={COLORS.primary} />
-          </TouchableOpacity>
+          <View style={{ gap: 10 }}>
+            <TouchableOpacity style={styles.roundButtonSmall} onPress={handleLocateUser}>
+              <MyLocationIcon />
+            </TouchableOpacity>
 
-
+            <TouchableOpacity style={styles.roundButtonSmall} onPress={handleOpenMapLayersModal}>
+              <Ionicons name="layers" size={22} color={COLORS.primary} />
+            </TouchableOpacity>
+          </View>
         </Animated.View>
 
 
@@ -6935,7 +7049,7 @@ const MapScreen: React.FC = () => {
                         rotation={segment.rotation}
                       >
                         <View style={styles.locationHistoryArrowIcon}>
-                          <Ionicons name="arrow-forward-circle" size={18} color="#2563EB" />
+                          {/* <Ionicons name="arrow-forward-circle" size={18} color="#2563EB" /> */}
                         </View>
                       </Marker>
                     ))}
@@ -7295,6 +7409,7 @@ const MapScreen: React.FC = () => {
         <DriveDetectionModal
           isOpen={isDriveDetectionModalOpen}
           onClose={() => setIsDriveDetectionModalOpen(false)}
+          onSettingsChanged={setDriveDetectionEnabled}
         />
 
         <AccountModal
@@ -7532,22 +7647,30 @@ const styles = StyleSheet.create({
     right: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     zIndex: 15,
   },
   pillButton: {
     backgroundColor: COLORS.white,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 30,
+    // paddingVertical: 8,
+    // paddingHorizontal: 16,
+    borderRadius: 50,
     elevation: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 3,
     marginRight: 8,
+  },
+  pillOverride: {
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 64,
+    height: 64,
+    top: 10,
   },
   pillButtonDisabled: {
     opacity: 0.65,
@@ -7904,19 +8027,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 1.4,
     elevation: 4,
-  },
-  userMarkerLabelBubble: {
-    marginTop: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: 'rgba(17, 24, 39, 0.85)',
-  },
-  userMarkerLabelText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.white,
-    maxWidth: 150,
   },
   locationMarkerWrapper: { alignItems: 'center', maxWidth: 220 },
   locationMarkerCard: {
